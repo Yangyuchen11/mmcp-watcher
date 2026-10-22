@@ -131,9 +131,49 @@
               <h3>商城全量商品一览 (按新着更新順)</h3>
               <p>涵盖商城全部 12 页 230+ 件商品，按官方最新修改时间降序排列，支持任意商品下单测试</p>
             </div>
-            <div class="pane-tools" style="display:flex;align-items:center;gap:10px;">
+            <div class="pane-tools">
               <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="扫描并拉取商城全部 12 页共 230+ 件商品">🔄 刷新全量商品</button>
-              <input type="text" id="catalog-filter" placeholder="筛选商品名称或ID..." class="filter-input">
+            </div>
+          </div>
+
+          <!-- Catalog Toolbar & Filters -->
+          <div class="catalog-toolbar">
+            <div class="catalog-filters-row">
+              <div class="search-box-wrapper">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="catalog-filter" placeholder="筛选商品名称、ID或关键字..." class="filter-input search-input">
+                <button type="button" id="btn-clear-filter" class="btn-clear-search" title="清空搜索" style="display:none;">✕</button>
+              </div>
+
+              <div class="stock-filter-group">
+                <button type="button" class="stock-pill active" data-stock="all">全部 <span class="pill-badge" id="count-all">0</span></button>
+                <button type="button" class="stock-pill" data-stock="instock">仅看有货 <span class="pill-badge instock" id="count-instock">0</span></button>
+                <button type="button" class="stock-pill" data-stock="soldout">仅看售罄 <span class="pill-badge soldout" id="count-soldout">0</span></button>
+              </div>
+
+              <div class="page-size-wrap">
+                <span class="page-size-label">每页:</span>
+                <select id="catalog-page-size" class="select-page-size">
+                  <option value="50">50 件</option>
+                  <option value="100" selected>100 件</option>
+                  <option value="200">200 件</option>
+                  <option value="all">全部显示</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Top Pagination Bar -->
+            <div class="pagination-bar" id="pagination-top">
+              <div class="pagination-info" id="catalog-page-info">
+                正在加载商品列表...
+              </div>
+              <div class="pagination-nav" id="catalog-pagination-nav">
+                <button class="page-nav-btn" data-action="first" title="首页" disabled>⏮</button>
+                <button class="page-nav-btn" data-action="prev" title="上一页" disabled>◀ 上一页</button>
+                <div class="page-number-buttons" id="catalog-page-numbers"></div>
+                <button class="page-nav-btn" data-action="next" title="下一页" disabled>下一页 ▶</button>
+                <button class="page-nav-btn" data-action="last" title="末页" disabled>⏭</button>
+              </div>
             </div>
           </div>
 
@@ -141,6 +181,18 @@
             <div class="empty-state">
               <div class="spinner"></div>
               <p>正在同步商城商品列表...</p>
+            </div>
+          </div>
+
+          <!-- Bottom Pagination Bar -->
+          <div class="pagination-bar bottom-pagination" id="pagination-bottom">
+            <div class="pagination-info" id="catalog-page-info-bottom"></div>
+            <div class="pagination-nav" id="catalog-pagination-nav-bottom">
+              <button class="page-nav-btn" data-action="first" title="首页" disabled>⏮</button>
+              <button class="page-nav-btn" data-action="prev" title="上一页" disabled>◀ 上一页</button>
+              <div class="page-number-buttons" id="catalog-page-numbers-bottom"></div>
+              <button class="page-nav-btn" data-action="next" title="下一页" disabled>下一页 ▶</button>
+              <button class="page-nav-btn" data-action="last" title="末页" disabled>⏭</button>
             </div>
           </div>
         </div>
