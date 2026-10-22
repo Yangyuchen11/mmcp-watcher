@@ -41,6 +41,7 @@ class BotEngine:
         self.purchased_item_ids: set = set()
         self.in_progress_item_ids: set = set()
         self.is_in_maintenance: bool = False
+        self._wake_event: Optional[asyncio.Event] = None
 
     @property
     def config(self) -> Dict[str, Any]:
@@ -79,7 +80,8 @@ class BotEngine:
     def reload_config(self):
         self.dispatcher = NotificationDispatcher(self.config)
         self.monitor.base_url = self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
-        self.log("INFO", "配置已重新载入并生效")
+        self.interrupt_sleep()
+        self.log("INFO", "配置已重新载入并即时生效")
 
     def reset_session(self):
         """Resets purchased items memory and counters to begin a fresh session"""
@@ -121,10 +123,25 @@ class BotEngine:
         asyncio.create_task(self.sync_full_catalog())
         self.monitor_task = asyncio.create_task(self._monitor_loop())
 
+    def interrupt_sleep(self):
+        """Immediately wakes up the monitor loop from sleep to apply interval or config changes without waiting."""
+        if self._wake_event is not None:
+            self._wake_event.set()
+
+    async def _sleep_interruptible(self, duration: float):
+        if self._wake_event is None:
+            self._wake_event = asyncio.Event()
+        self._wake_event.clear()
+        try:
+            await asyncio.wait_for(self._wake_event.wait(), timeout=max(0.01, duration))
+        except asyncio.TimeoutError:
+            pass
+
     async def stop(self):
         if not self.is_running:
             return
         self.is_running = False
+        self.interrupt_sleep()
         if self.monitor_task:
             self.monitor_task.cancel()
             try:
@@ -139,6 +156,7 @@ class BotEngine:
         rush = not self.config.get("shop", {}).get("rush_mode", False)
         self.config["shop"]["rush_mode"] = rush
         self.config_manager.save()
+        self.interrupt_sleep()
         status_text = "开启 (极速抢购模式)" if rush else "关闭 (日常巡检模式)"
         self.log("WARN", f"⚡ 极速模式已切换为: {status_text}")
         return rush
@@ -167,7 +185,8 @@ class BotEngine:
             except Exception:
                 pass
         self.config_manager.save()
-        self.log("INFO", f"⏱️ 巡检间隔已更新: 日常 = {self.config['shop'].get('interval_seconds', 3.0)}s, 极速 = {self.config['shop'].get('rush_interval_seconds', 0.8)}s")
+        self.interrupt_sleep()
+        self.log("INFO", f"⏱️ 巡检间隔已更新并即时重置计时: 日常 = {self.config['shop'].get('interval_seconds', 3.0)}s, 极速 = {self.config['shop'].get('rush_interval_seconds', 0.8)}s")
 
     async def _monitor_loop(self):
         while self.is_running:
@@ -205,7 +224,7 @@ class BotEngine:
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
                     self.stats["last_scan_status"] = f"维护中 (Maintenance, {elapsed_ms}ms)"
-                    await asyncio.sleep(interval)
+                    await self._sleep_interruptible(interval)
                     continue
                 else:
                     # If just exited maintenance!
@@ -245,7 +264,7 @@ class BotEngine:
                 self.stats["last_scan_status"] = f"Error: {e}"
                 self.log("ERROR", f"巡检发生异常: {e}")
 
-            await asyncio.sleep(interval)
+            await self._sleep_interruptible(interval)
 
     async def _handle_trigger(self, event_type: str, item: ShopItem):
         event_name_map = {

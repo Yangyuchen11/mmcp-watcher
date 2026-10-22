@@ -12,6 +12,12 @@ try:
 except ImportError:
     HAS_HTTP2 = False
 
+try:
+    import lxml
+    DEFAULT_PARSER = "lxml"
+except ImportError:
+    DEFAULT_PARSER = "html.parser"
+
 @dataclass
 class ShopItem:
     item_id: str
@@ -51,9 +57,11 @@ class FC2Monitor:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self.client is None or self.client.is_closed:
+            limits = httpx.Limits(max_keepalive_connections=20, max_connections=30, keepalive_expiry=60.0)
             self.client = httpx.AsyncClient(
                 headers=self.headers,
                 timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=limits,
                 http2=HAS_HTTP2,
                 follow_redirects=True
             )
@@ -85,7 +93,7 @@ class FC2Monitor:
         return False
 
     def parse_items_from_html(self, html: str) -> List[ShopItem]:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, DEFAULT_PARSER)
         items: List[ShopItem] = []
 
         item_nodes = soup.select(".item_list li.item, .item_list .item")
