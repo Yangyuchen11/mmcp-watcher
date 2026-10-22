@@ -23,8 +23,22 @@
       </div>
 
       <div class="header-actions">
+        <!-- Interval Quick Controls -->
+        <div class="interval-badge-group" title="直接在界面修改巡检间隔（秒），即时生效">
+          <div class="interval-pill" title="日常巡检间隔 (单位: 秒，输入自动生效)">
+            <span class="pill-label">日常</span>
+            <input type="number" id="quick-interval" step="0.5" min="0.5" max="60" value="3.0">
+            <span class="pill-unit">s</span>
+          </div>
+          <div class="interval-pill rush" title="极速抢购/维护期间间隔 (单位: 秒，输入自动生效)">
+            <span class="pill-label">⚡极速</span>
+            <input type="number" id="quick-rush-interval" step="0.1" min="0.2" max="10" value="0.8">
+            <span class="pill-unit">s</span>
+          </div>
+        </div>
+
         <!-- Rush Mode Switch -->
-        <button id="btn-toggle-rush" class="pill-btn rush-off" title="切换日常巡检 (3s) 与 抢购突击 (0.8s)">
+        <button id="btn-toggle-rush" class="pill-btn rush-off" title="切换日常巡检与抢购突击">
           <span class="icon">⚡</span>
           <span class="label">极速抢购模式</span>
           <span class="status-indicator">OFF</span>
@@ -181,34 +195,34 @@
               <div class="form-row">
                 <div class="form-group">
                   <label for="cfg-name">姓名 (お名前)</label>
-                  <input type="text" id="cfg-name" value="楊　雨晨">
+                  <input type="text" id="cfg-name" placeholder="例: 山田　太郎">
                 </div>
                 <div class="form-group">
                   <label for="cfg-name-kana">片假名 (フリガナ)</label>
-                  <input type="text" id="cfg-name-kana" value="ヨウウシン">
+                  <input type="text" id="cfg-name-kana" placeholder="例: ヤマダ　タロウ">
                 </div>
               </div>
 
               <div class="form-group">
                 <label for="cfg-email">电子邮箱 (メールアドレス)</label>
-                <input type="email" id="cfg-email" value="yyc285184831@gmail.com">
+                <input type="email" id="cfg-email" placeholder="例: example@gmail.com">
               </div>
 
               <div class="form-row">
                 <div class="form-group">
                   <label for="cfg-tel">电话号码 (電話番号)</label>
-                  <input type="text" id="cfg-tel" value="08037304421">
+                  <input type="text" id="cfg-tel" placeholder="例: 08012345678">
                 </div>
                 <div class="form-group">
                   <label for="cfg-postcode">邮政编码 (郵便番号)</label>
-                  <input type="text" id="cfg-postcode" value="3510015">
+                  <input type="text" id="cfg-postcode" placeholder="例: 1000001">
                 </div>
               </div>
 
               <div class="form-row">
                 <div class="form-group">
                   <label for="cfg-prefecture">都道府县 (都道府県)</label>
-                  <input type="text" id="cfg-prefecture" value="埼玉県">
+                  <input type="text" id="cfg-prefecture" placeholder="例: 東京都">
                 </div>
                 <div class="form-group">
                   <label for="cfg-payment">支付方式</label>
@@ -218,7 +232,7 @@
 
               <div class="form-group">
                 <label for="cfg-address">详细住址 (ご住所)</label>
-                <textarea id="cfg-address" rows="2">朝霞市幸町</textarea>
+                <textarea id="cfg-address" rows="2" placeholder="市区町村、番地、建物名・部屋番号"></textarea>
               </div>
 
               <div class="form-group">

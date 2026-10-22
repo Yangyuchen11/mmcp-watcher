@@ -78,6 +78,17 @@ def create_app(config_path: str = "config.json") -> FastAPI:
         rush = await bot.toggle_rush_mode()
         return {"success": True, "rush_mode": rush}
 
+    @app.post("/api/update-intervals")
+    async def update_intervals(payload: Dict[str, Any]):
+        interval = payload.get("interval_seconds")
+        rush_interval = payload.get("rush_interval_seconds")
+        bot.update_intervals(interval, rush_interval)
+        return {
+            "success": True,
+            "interval_seconds": bot.config.get("shop", {}).get("interval_seconds", 3.0),
+            "rush_interval_seconds": bot.config.get("shop", {}).get("rush_interval_seconds", 0.8)
+        }
+
     @app.post("/api/toggle-dry-run")
     async def toggle_dry_run():
         dry = await bot.toggle_dry_run()

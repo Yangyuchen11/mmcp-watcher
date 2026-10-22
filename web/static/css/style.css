@@ -128,6 +128,72 @@ body {
   gap: 12px;
 }
 
+/* Header Interval Controls */
+.interval-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(14, 18, 28, 0.7);
+  padding: 4px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.interval-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #181f2f;
+  padding: 3px 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.interval-pill.rush {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.interval-pill .pill-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.interval-pill.rush .pill-label {
+  color: var(--warning);
+}
+
+.interval-pill input {
+  width: 44px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: center;
+  padding: 1px 0;
+  outline: none;
+}
+
+.interval-pill input:focus {
+  border-bottom: 1px solid var(--primary);
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 3px;
+}
+
+.interval-pill.rush input:focus {
+  border-bottom: 1px solid var(--warning);
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.interval-pill .pill-unit {
+  font-size: 0.72rem;
+  color: var(--text-sub);
+}
+
 /* Pill Buttons */
 .pill-btn {
   display: inline-flex;

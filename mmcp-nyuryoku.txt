@@ -61,32 +61,9 @@
 												<!-- 会員情報 -->
 												<!-- 全件表示 -->
 																		<!-- カテゴリー -->
-																		<!-- 商品詳細 -->
-												<!--レビュー一覧 -->
-												<!-- お問い合わせ画面 -->
-												<!--お支払い方法-->
-												<!--新規会員登録ページ-->
-												<!--会員退会ページ-->
-																								<!--レビューを書く -->
-																	</ul>
-				</div><!--/topic_path-->
-				<!-- /位置リンク表示に適用 -->
-				
-				
-				
-				
-				
-				
-				
-				
-				
-				
-				
-								<!--################## レジ ####################-->
+																								<!--################## レジ ####################-->
 				<div class="contents" id="checkout_page">
 					<h2>ご注文情報</h2>
-																<div class="errormessage">カートにある商品が売り切れました。カートの中身を確認してください。</div>
-															
 					<form name="form" method="post" action="/regi">
 						<!-- お客様情報 -->
 						<table cellspacing="0" class="table1">
@@ -95,28 +72,28 @@
 							</tr>
 							<tr>
 								<td class="td2" style="width:25%;">お名前</td>
-								<td class="td3" style="width:75%;"><input id="in_name" class="in name" name="address[in][name]" size="30" type="text" value="楊　雨晨" /><font color="#ff0000" size="1"><b>※</b></font></td>
+								<td class="td3" style="width:75%;"><input id="in_name" class="in name" name="address[in][name]" size="30" type="text" value="山田　太郎" /><font color="#ff0000" size="1"><b>※</b></font></td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">フリガナ</td>
-								<td class="td3" style="width:75%;"><input id="in_kkana" class="in kkana" name="address[in][kkana]" size="30" pattern=".*" maxlength="" title="カタカナで入力してください。" type="text" value="ヨウウシン" /><font color="#ff0000" size="1"><b>※</b></font></td>
+								<td class="td3" style="width:75%;"><input id="in_kkana" class="in kkana" name="address[in][kkana]" size="30" pattern=".*" maxlength="" title="カタカナで入力してください。" type="text" value="ヤマダ　タロウ" /><font color="#ff0000" size="1"><b>※</b></font></td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">メールアドレス</td>
-								<td class="td3" style="width:75%;"><input id="in_mail" class="in mail" name="address[in][mail]" size="40" type="email" value="yyc285184831@gmail.com" istyle="3" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font></td>
+								<td class="td3" style="width:75%;"><input id="in_mail" class="in mail" name="address[in][mail]" size="40" type="email" value="buyer_example@gmail.com" istyle="3" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font></td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">メールアドレス<br />（確認）</td>
-								<td class="td3" style="width:75%;"><input id="in_mail_check" class="in mail_check" name="address[in][mail_check]" size="40" type="email" value="yyc285184831@gmail.com" istyle="3" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font><br />（確認のためもう一度ご記入下さい）</td>
+								<td class="td3" style="width:75%;"><input id="in_mail_check" class="in mail_check" name="address[in][mail_check]" size="40" type="email" value="buyer_example@gmail.com" istyle="3" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font><br />（確認のためもう一度ご記入下さい）</td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">電話番号</td>
-								<td class="td3" style="width:75%;"><input id="in_tel" class="in tel" name="address[in][tel]" size="30" type="text" value="08037304421" istyle="4" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font>例）123-456-7890</td>
+								<td class="td3" style="width:75%;"><input id="in_tel" class="in tel" name="address[in][tel]" size="30" type="text" value="08012345678" istyle="4" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font>例）123-456-7890</td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">郵便番号</td>
-								<td class="td3" style="width:75%;"><input id="in_postnum" class="in postnum" name="address[in][postnum]" size="30" type="text" value="3510015" istyle="4" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font>例）765-4321</td>
+								<td class="td3" style="width:75%;"><input id="in_postnum" class="in postnum" name="address[in][postnum]" size="30" type="text" value="1000001" istyle="4" style="ime-mode: disabled;" /><font color="#ff0000" size="1"><b>※</b></font>例）765-4321</td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">都道府県</td>
-								<td class="td3" style="width:75%;"><select id="in_ken" class="in ken" name="address[in][ken]"><option value="">選択してください</option><option value="北海道">北海道</option><option value="青森県">青森県</option><option value="秋田県">秋田県</option><option value="岩手県">岩手県</option><option value="宮城県">宮城県</option><option value="山形県">山形県</option><option value="福島県">福島県</option><option value="栃木県">栃木県</option><option value="新潟県">新潟県</option><option value="群馬県">群馬県</option><option value="埼玉県" selected="selected">埼玉県</option><option value="茨城県">茨城県</option><option value="千葉県">千葉県</option><option value="東京都">東京都</option><option value="神奈川県">神奈川県</option><option value="山梨県">山梨県</option><option value="長野県">長野県</option><option value="岐阜県">岐阜県</option><option value="富山県">富山県</option><option value="石川県">石川県</option><option value="静岡県">静岡県</option><option value="愛知県">愛知県</option><option value="三重県">三重県</option><option value="奈良県">奈良県</option><option value="和歌山県">和歌山県</option><option value="福井県">福井県</option><option value="滋賀県">滋賀県</option><option value="京都府">京都府</option><option value="大阪府">大阪府</option><option value="兵庫県">兵庫県</option><option value="岡山県">岡山県</option><option value="鳥取県">鳥取県</option><option value="島根県">島根県</option><option value="広島県">広島県</option><option value="山口県">山口県</option><option value="香川県">香川県</option><option value="徳島県">徳島県</option><option value="愛媛県">愛媛県</option><option value="高知県">高知県</option><option value="福岡県">福岡県</option><option value="佐賀県">佐賀県</option><option value="大分県">大分県</option><option value="熊本県">熊本県</option><option value="宮崎県">宮崎県</option><option value="長崎県">長崎県</option><option value="鹿児島県">鹿児島県</option><option value="沖縄県">沖縄県</option><option value="その他">その他</option></select><font color="#ff0000" size="1"><b>※</b></font></td>
+								<td class="td3" style="width:75%;"><select id="in_ken" class="in ken" name="address[in][ken]"><option value="">選択してください</option><option value="北海道">北海道</option><option value="青森県">青森県</option><option value="秋田県">秋田県</option><option value="岩手県">岩手県</option><option value="宮城県">宮城県</option><option value="山形県">山形県</option><option value="福島県">福島県</option><option value="栃木県">栃木県</option><option value="新潟県">新潟県</option><option value="群馬県">群馬県</option><option value="埼玉県">埼玉県</option><option value="茨城県">茨城県</option><option value="千葉県">千葉県</option><option value="東京都" selected="selected">東京都</option><option value="神奈川県">神奈川県</option><option value="山梨県">山梨県</option><option value="長野県">長野県</option><option value="岐阜県">岐阜県</option><option value="富山県">富山県</option><option value="石川県">石川県</option><option value="静岡県">静岡県</option><option value="愛知県">愛知県</option><option value="三重県">三重県</option><option value="奈良県">奈良県</option><option value="和歌山県">和歌山県</option><option value="福井県">福井県</option><option value="滋賀県">滋賀県</option><option value="京都府">京都府</option><option value="大阪府">大阪府</option><option value="兵庫県">兵庫県</option><option value="岡山県">岡山県</option><option value="鳥取県">鳥取県</option><option value="島根県">島根県</option><option value="広島県">広島県</option><option value="山口県">山口県</option><option value="香川県">香川県</option><option value="徳島県">徳島県</option><option value="愛媛県">愛媛県</option><option value="高知県">高知県</option><option value="福岡県">福岡県</option><option value="佐賀県">佐賀県</option><option value="大分県">大分県</option><option value="熊本県">熊本県</option><option value="宮崎県">宮崎県</option><option value="長崎県">長崎県</option><option value="鹿児島県">鹿児島県</option><option value="沖縄県">沖縄県</option><option value="その他">その他</option></select><font color="#ff0000" size="1"><b>※</b></font></td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">ご住所</td>
-								<td class="td3" style="width:75%;"><textarea id="in_address" class="in address" name="address[in][address]" cols="40" rows="2">朝霞市幸町</textarea><font color="#ff0000" size="1"><b>※</b></font></td>
+								<td class="td3" style="width:75%;"><textarea id="in_address" class="in address" name="address[in][address]" cols="40" rows="2">千代田区千代田1-1</textarea><font color="#ff0000" size="1"><b>※</b></font></td>
 							</tr><tr>
 								<td class="td2" style="width:25%;">備　考</td>
 								<td class="td3" style="width:75%;"><textarea id="in_biko" class="in biko" name="address[in][biko]" cols="40" rows="5"></textarea><font></font></td>

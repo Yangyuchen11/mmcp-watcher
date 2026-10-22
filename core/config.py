@@ -30,13 +30,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "retry_delay_seconds": 0.5
     },
     "buyer": {
-        "name": "楊　雨晨",
-        "name_kana": "ヨウウシン",
-        "email": "yyc285184831@gmail.com",
-        "tel": "08037304421",
-        "postal_code": "3510015",
-        "prefecture": "埼玉県",
-        "address": "朝霞市幸町",
+        "name": "山田　太郎",
+        "name_kana": "ヤマダ　タロウ",
+        "email": "buyer_example@gmail.com",
+        "tel": "08012345678",
+        "postal_code": "1000001",
+        "prefecture": "東京都",
+        "address": "千代田区千代田1-1",
         "biko": "",
         "payment_method": "代金引換"  # Auto-matched or first available option
     },

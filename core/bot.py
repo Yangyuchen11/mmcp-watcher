@@ -151,6 +151,24 @@ class BotEngine:
         self.log("WARN", f"🛡️ 模拟模式状态: {status_text}")
         return dry
 
+    def update_intervals(self, interval: Optional[float] = None, rush_interval: Optional[float] = None):
+        if "shop" not in self.config:
+            self.config["shop"] = {}
+        if interval is not None:
+            try:
+                val = max(0.2, round(float(interval), 2))
+                self.config["shop"]["interval_seconds"] = val
+            except Exception:
+                pass
+        if rush_interval is not None:
+            try:
+                val = max(0.1, round(float(rush_interval), 2))
+                self.config["shop"]["rush_interval_seconds"] = val
+            except Exception:
+                pass
+        self.config_manager.save()
+        self.log("INFO", f"⏱️ 巡检间隔已更新: 日常 = {self.config['shop'].get('interval_seconds', 3.0)}s, 极速 = {self.config['shop'].get('rush_interval_seconds', 0.8)}s")
+
     async def _monitor_loop(self):
         while self.is_running:
             shop_cfg = self.config.get("shop", {})

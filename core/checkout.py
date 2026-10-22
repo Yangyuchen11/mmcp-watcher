@@ -132,14 +132,14 @@ class FC2Checkout:
         regi_url = f"{self.base_url}/regi"
 
         post_data = {
-            "address[in][name]": self.buyer_info.get("name", "楊　雨晨"),
-            "address[in][kkana]": self.buyer_info.get("name_kana", "ヨウウシン"),
-            "address[in][mail]": self.buyer_info.get("email", "yyc285184831@gmail.com"),
-            "address[in][mail_check]": self.buyer_info.get("email", "yyc285184831@gmail.com"),
-            "address[in][tel]": self.buyer_info.get("tel", "08037304421"),
-            "address[in][postnum]": self.buyer_info.get("postal_code", "3510015"),
-            "address[in][ken]": self.buyer_info.get("prefecture", "埼玉県"),
-            "address[in][address]": self.buyer_info.get("address", "朝霞市幸町"),
+            "address[in][name]": self.buyer_info.get("name", "山田　太郎"),
+            "address[in][kkana]": self.buyer_info.get("name_kana", "ヤマダ　タロウ"),
+            "address[in][mail]": self.buyer_info.get("email", "buyer_example@gmail.com"),
+            "address[in][mail_check]": self.buyer_info.get("email", "buyer_example@gmail.com"),
+            "address[in][tel]": self.buyer_info.get("tel", "08012345678"),
+            "address[in][postnum]": self.buyer_info.get("postal_code", "1000001"),
+            "address[in][ken]": self.buyer_info.get("prefecture", "東京都"),
+            "address[in][address]": self.buyer_info.get("address", "千代田区千代田1-1"),
             "address[in][biko]": self.buyer_info.get("biko", ""),
             "payment_method": payment_method_val,
             "Submit1": "true"

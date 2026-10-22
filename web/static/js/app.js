@@ -10,6 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchStatus();
   fetchConfig();
   initEventHandlers();
+  initIntervalControls();
 
   // Polling loop for status updates every 2s
   setInterval(fetchStatus, 2000);
@@ -355,8 +356,15 @@ async function fetchConfig() {
     const shop = cfg.shop || {};
     document.getElementById("cfg-keywords").value = (shop.target_keywords || []).join(", ");
     document.getElementById("cfg-exclude").value = (shop.exclude_keywords || []).join(", ");
-    document.getElementById("cfg-interval").value = shop.interval_seconds || 3.0;
-    document.getElementById("cfg-rush-interval").value = shop.rush_interval_seconds || 0.8;
+    
+    const normalInterval = shop.interval_seconds || 3.0;
+    const rushInterval = shop.rush_interval_seconds || 0.8;
+    document.getElementById("cfg-interval").value = normalInterval;
+    document.getElementById("cfg-rush-interval").value = rushInterval;
+    const qInterval = document.getElementById("quick-interval");
+    const qRush = document.getElementById("quick-rush-interval");
+    if (qInterval) qInterval.value = normalInterval;
+    if (qRush) qRush.value = rushInterval;
 
     // Order
     const order = cfg.order || {};
@@ -372,6 +380,57 @@ async function fetchConfig() {
   } catch (e) {
     console.warn("fetchConfig error:", e);
   }
+}
+
+// Interactive Interval Controls (Header + Sidebar Live Sync)
+function initIntervalControls() {
+  const quickInterval = document.getElementById("quick-interval");
+  const quickRush = document.getElementById("quick-rush-interval");
+  const cfgInterval = document.getElementById("cfg-interval");
+  const cfgRush = document.getElementById("cfg-rush-interval");
+
+  const syncAndSaveNormal = async (val) => {
+    const num = parseFloat(val);
+    if (isNaN(num) || num <= 0) return;
+    if (quickInterval) quickInterval.value = num;
+    if (cfgInterval) cfgInterval.value = num;
+    try {
+      const resp = await fetch("/api/update-intervals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interval_seconds: num })
+      });
+      if (resp.ok) {
+        showToast(`⏱️ 日常巡检间隔已设为 ${num} 秒 (即时生效)`, "info");
+      }
+    } catch (e) {
+      showToast("设置日常间隔失败: " + e.message, "error");
+    }
+  };
+
+  const syncAndSaveRush = async (val) => {
+    const num = parseFloat(val);
+    if (isNaN(num) || num <= 0) return;
+    if (quickRush) quickRush.value = num;
+    if (cfgRush) cfgRush.value = num;
+    try {
+      const resp = await fetch("/api/update-intervals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rush_interval_seconds: num })
+      });
+      if (resp.ok) {
+        showToast(`⚡ 极速突击间隔已设为 ${num} 秒 (即时生效)`, "warn");
+      }
+    } catch (e) {
+      showToast("设置极速间隔失败: " + e.message, "error");
+    }
+  };
+
+  if (quickInterval) quickInterval.addEventListener("change", (e) => syncAndSaveNormal(e.target.value));
+  if (cfgInterval) cfgInterval.addEventListener("change", (e) => syncAndSaveNormal(e.target.value));
+  if (quickRush) quickRush.addEventListener("change", (e) => syncAndSaveRush(e.target.value));
+  if (cfgRush) cfgRush.addEventListener("change", (e) => syncAndSaveRush(e.target.value));
 }
 
 // Save Configuration

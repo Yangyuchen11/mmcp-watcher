@@ -122,17 +122,17 @@ python run.py
 
 ## ⚙️ 下单信息与关键配置说明
 
-收件人数据已根据您提供的表单源码（`mmcp-nyuryoku.txt`）完成预配置：
+收件人数据已在 Web 控制面板提供预设示例（可在界面或 Dokploy 中自定义配置）：
 
-| 字段 | 对应 FC2 表单项 | 默认值 |
+| 字段 | 对应 FC2 表单项 | 示例值 |
 | :--- | :--- | :--- |
-| **姓名** | `address[in][name]` | `楊　雨晨` |
-| **片假名** | `address[in][kkana]` | `ヨウウシン` |
-| **邮箱** | `address[in][mail]` | `yyc285184831@gmail.com` |
-| **电话** | `address[in][tel]` | `08037304421` |
-| **邮编** | `address[in][postnum]` | `3510015` |
-| **都道府县**| `address[in][ken]` | `埼玉県` |
-| **住所** | `address[in][address]`| `朝霞市幸町`（可在 Web 端补充番地号） |
+| **姓名** | `address[in][name]` | `山田　太郎` |
+| **片假名** | `address[in][kkana]` | `ヤマダ　タロウ` |
+| **邮箱** | `address[in][mail]` | `buyer_example@gmail.com` |
+| **电话** | `address[in][tel]` | `08012345678` |
+| **邮编** | `address[in][postnum]` | `1000001` |
+| **都道府县**| `address[in][ken]` | `東京都` |
+| **住所** | `address[in][address]`| `千代田区千代田1-1` |
 | **支付方式**| `payment_method` | `代金引換`（邮局 Yu-Pack 代收） |
 
 > 💡 **特别提醒**：
