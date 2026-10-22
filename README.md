@@ -18,12 +18,8 @@
 3. **两种巡检模式随意切换**：
    - **日常巡检**：默认 3.0 秒间隔，低频巡检不占用带宽与被限制。
    - **极速抢购模式 (Rush Mode)**：上新前一键开启 0.8 秒（可调至 0.3~0.5s）高频雷达扫描，第一时间捕捉上新与补货瞬间。
-4. **多通道秒级消息广播**：
-   - Telegram 机器人
-   - Discord Webhook
-   - Server酱（微信服务号推送）
-   - Bark（iOS 极速通知）
-   - 飞书 / Lark 自定义群机器人
+4. **Discord Webhook 实时通知**：
+   - 上新、补货与下单结果毫秒级推送至 Discord 频道（支持富文本卡片 Embed 与直达链接）。
 5. **现代暗黑仪表盘 (Web Dashboard)**：
    - 实时查看当前商城商品库存状态（自动展示商品缩略图、价格、售罄/在库徽章）。
    - 一键对货架任意商品发起测试下单（Dry-run）。
@@ -43,11 +39,7 @@ mmcp/
 │   └── bot.py             # 后台调度机器人核心
 ├── notifiers/
 │   ├── base.py            # 通知接口基类
-│   ├── telegram.py        # Telegram 通知
-│   ├── discord.py         # Discord Webhook
-│   ├── serverchan.py      # Server酱 (微信推送)
-│   ├── bark.py            # Bark iOS 推送
-│   └── feishu.py          # 飞书群通知
+│   └── discord.py         # Discord Webhook 通知
 ├── web/
 │   ├── app.py             # FastAPI 控制面板后端 API
 │   ├── templates/

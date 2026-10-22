@@ -302,28 +302,11 @@ async function fetchConfig() {
     document.getElementById("cfg-max-orders").value = order.max_orders || 1;
     document.getElementById("cfg-quantity").value = order.quantity || 1;
 
-    // Notifications
+    // Notifications (Discord only)
     const notifs = cfg.notifications || {};
-    const tg = notifs.telegram || {};
-    document.getElementById("chk-tg-enable").checked = !!tg.enabled;
-    document.getElementById("cfg-tg-token").value = tg.bot_token || "";
-    document.getElementById("cfg-tg-chatid").value = tg.chat_id || "";
-
     const dc = notifs.discord || {};
     document.getElementById("chk-dc-enable").checked = !!dc.enabled;
     document.getElementById("cfg-dc-url").value = dc.webhook_url || "";
-
-    const sc = notifs.serverchan || {};
-    document.getElementById("chk-sc-enable").checked = !!sc.enabled;
-    document.getElementById("cfg-sc-key").value = sc.sendkey || "";
-
-    const bk = notifs.bark || {};
-    document.getElementById("chk-bk-enable").checked = !!bk.enabled;
-    document.getElementById("cfg-bk-key").value = bk.key || "";
-
-    const fs = notifs.feishu || {};
-    document.getElementById("chk-fs-enable").checked = !!fs.enabled;
-    document.getElementById("cfg-fs-url").value = fs.webhook_url || "";
 
   } catch (e) {
     console.warn("fetchConfig error:", e);
@@ -365,26 +348,9 @@ async function saveConfig() {
       quantity: parseInt(document.getElementById("cfg-quantity").value, 10) || 1
     },
     notifications: {
-      telegram: {
-        enabled: document.getElementById("chk-tg-enable").checked,
-        bot_token: document.getElementById("cfg-tg-token").value.trim(),
-        chat_id: document.getElementById("cfg-tg-chatid").value.trim()
-      },
       discord: {
         enabled: document.getElementById("chk-dc-enable").checked,
         webhook_url: document.getElementById("cfg-dc-url").value.trim()
-      },
-      serverchan: {
-        enabled: document.getElementById("chk-sc-enable").checked,
-        sendkey: document.getElementById("cfg-sc-key").value.trim()
-      },
-      bark: {
-        enabled: document.getElementById("chk-bk-enable").checked,
-        key: document.getElementById("cfg-bk-key").value.trim()
-      },
-      feishu: {
-        enabled: document.getElementById("chk-fs-enable").checked,
-        webhook_url: document.getElementById("cfg-fs-url").value.trim()
       }
     }
   };

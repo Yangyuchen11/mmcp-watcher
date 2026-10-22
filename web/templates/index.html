@@ -265,70 +265,20 @@
                 <button id="btn-test-notify" class="btn-xs btn-ghost">测试通知</button>
               </div>
 
-              <!-- Telegram -->
-              <div class="notify-channel">
-                <div class="channel-header">
-                  <label class="switch-label">
-                    <input type="checkbox" id="chk-tg-enable">
-                    <span>Telegram 机器人</span>
-                  </label>
-                </div>
-                <div class="channel-inputs">
-                  <input type="text" id="cfg-tg-token" placeholder="Bot Token (如: 123456:ABC-DEF...)">
-                  <input type="text" id="cfg-tg-chatid" placeholder="Chat ID (如: 987654321)">
-                </div>
-              </div>
-
-              <!-- Discord -->
+              <!-- Discord Webhook Only -->
               <div class="notify-channel">
                 <div class="channel-header">
                   <label class="switch-label">
                     <input type="checkbox" id="chk-dc-enable">
-                    <span>Discord Webhook</span>
+                    <span>Discord Webhook 推送</span>
                   </label>
                 </div>
                 <div class="channel-inputs">
-                  <input type="text" id="cfg-dc-url" placeholder="Webhook URL">
+                  <input type="text" id="cfg-dc-url" placeholder="https://discord.com/api/webhooks/...">
                 </div>
-              </div>
-
-              <!-- ServerChan -->
-              <div class="notify-channel">
-                <div class="channel-header">
-                  <label class="switch-label">
-                    <input type="checkbox" id="chk-sc-enable">
-                    <span>Server酱 (微信推送)</span>
-                  </label>
-                </div>
-                <div class="channel-inputs">
-                  <input type="text" id="cfg-sc-key" placeholder="SendKey">
-                </div>
-              </div>
-
-              <!-- Bark -->
-              <div class="notify-channel">
-                <div class="channel-header">
-                  <label class="switch-label">
-                    <input type="checkbox" id="chk-bk-enable">
-                    <span>Bark (iOS推送)</span>
-                  </label>
-                </div>
-                <div class="channel-inputs">
-                  <input type="text" id="cfg-bk-key" placeholder="Bark Device Key">
-                </div>
-              </div>
-
-              <!-- Feishu -->
-              <div class="notify-channel">
-                <div class="channel-header">
-                  <label class="switch-label">
-                    <input type="checkbox" id="chk-fs-enable">
-                    <span>飞书 / Lark Webhook</span>
-                  </label>
-                </div>
-                <div class="channel-inputs">
-                  <input type="text" id="cfg-fs-url" placeholder="飞书群自定义机器人 Webhook URL">
-                </div>
+                <p style="font-size: 0.72rem; color: #64748b; margin-top: 2px;">
+                  填入 Discord 频道生成的 Webhook URL 并在左上方勾选开启即可。
+                </p>
               </div>
             </div>
           </div>

@@ -35,32 +35,14 @@
     "payment_method": "代金引換"
   },
   "notifications": {
-    "telegram": {
-      "enabled": false,
-      "bot_token": "",
-      "chat_id": ""
-    },
     "discord": {
-      "enabled": false,
-      "webhook_url": ""
-    },
-    "serverchan": {
-      "enabled": false,
-      "sendkey": ""
-    },
-    "bark": {
-      "enabled": false,
-      "server": "https://api.day.app",
-      "key": ""
-    },
-    "feishu": {
       "enabled": false,
       "webhook_url": ""
     }
   },
   "web": {
     "host": "0.0.0.0",
-    "port": 8080,
+    "port": 8081,
     "secret_token": ""
   }
 }

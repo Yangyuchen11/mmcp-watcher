@@ -34,25 +34,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "payment_method": "代金引換"  # Auto-matched or first available option
     },
     "notifications": {
-        "telegram": {
-            "enabled": False,
-            "bot_token": "",
-            "chat_id": ""
-        },
         "discord": {
-            "enabled": False,
-            "webhook_url": ""
-        },
-        "serverchan": {
-            "enabled": False,
-            "sendkey": ""
-        },
-        "bark": {
-            "enabled": False,
-            "server": "https://api.day.app",
-            "key": ""
-        },
-        "feishu": {
             "enabled": False,
             "webhook_url": ""
         }
