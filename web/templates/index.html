@@ -332,6 +332,17 @@
                   <input type="number" id="cfg-quantity" min="1" value="1">
                 </div>
               </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-retry-count" title="加购或结算遭遇 502/503/网络超时时的连续自动重试次数 (建议3~5次)">下单异常重试次数</label>
+                  <input type="number" id="cfg-retry-count" min="1" max="10" value="3">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-retry-delay" title="每次重试之间的等待间隔时间（秒，建议0.2~0.5秒）">重试等待间隔 (秒)</label>
+                  <input type="number" id="cfg-retry-delay" step="0.1" min="0.1" max="3.0" value="0.3">
+                </div>
+              </div>
             </div>
 
             <!-- Notifications Section -->

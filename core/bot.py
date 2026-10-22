@@ -347,6 +347,15 @@ class BotEngine:
                     else:
                         remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
                         self.log("INFO", f"已成功抢下 1 款商品 (ID: {item.item_id})，当前已获 {len(self.purchased_item_ids)} 款，继续监控其余款式 ({remaining})")
+                else:
+                    # If checkout failed because of server busy / network glitch (and NOT because item was sold out)
+                    msg = res.get("message", "")
+                    is_soldout = "售罄" in msg or "売り切れ" in msg or "品切れ" in msg or "0件" in msg
+                    if not is_soldout:
+                        # Reset in known_items so subsequent scans will continuously re-trigger until bought or sold out
+                        if item.item_id in self.monitor.known_items:
+                            self.monitor.known_items[item.item_id].in_stock = False
+                        self.log("WARN", f"⚠️ 商品 {item.title} (ID: {item.item_id}) 暂因网络/服务器繁忙下单未完成，已重置触发状态，若下轮依然在库将持续发起抢购！")
             finally:
                 self.in_progress_item_ids.discard(item.item_id)
 

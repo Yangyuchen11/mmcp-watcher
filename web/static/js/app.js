@@ -633,6 +633,10 @@ async function fetchConfig() {
     const order = cfg.order || {};
     document.getElementById("cfg-max-orders").value = (order.max_orders !== undefined) ? order.max_orders : 1;
     document.getElementById("cfg-quantity").value = order.quantity || 1;
+    const retryCountEl = document.getElementById("cfg-retry-count");
+    if (retryCountEl) retryCountEl.value = (order.retry_count !== undefined) ? order.retry_count : 3;
+    const retryDelayEl = document.getElementById("cfg-retry-delay");
+    if (retryDelayEl) retryDelayEl.value = (order.retry_delay_seconds !== undefined) ? order.retry_delay_seconds : 0.3;
 
     // Notifications (Discord only)
     const notifs = cfg.notifications || {};
@@ -729,7 +733,9 @@ async function saveConfig() {
     },
     order: {
       max_orders: isNaN(parseInt(document.getElementById("cfg-max-orders").value, 10)) ? 1 : parseInt(document.getElementById("cfg-max-orders").value, 10),
-      quantity: parseInt(document.getElementById("cfg-quantity").value, 10) || 1
+      quantity: parseInt(document.getElementById("cfg-quantity").value, 10) || 1,
+      retry_count: parseInt(document.getElementById("cfg-retry-count").value, 10) || 3,
+      retry_delay_seconds: parseFloat(document.getElementById("cfg-retry-delay").value) || 0.3
     },
     notifications: {
       discord: {
