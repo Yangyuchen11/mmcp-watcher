@@ -40,7 +40,7 @@ def create_app(config_path: str = "config.json") -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request=request, name="index.html")
 
     @app.get("/api/status")
     async def get_status():
