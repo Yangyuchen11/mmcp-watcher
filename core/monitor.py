@@ -30,7 +30,22 @@ class ShopItem:
     category_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["price_value"] = self.price_value
+        return d
+
+    @property
+    def price_value(self) -> Optional[int]:
+        """Extracts the integer price value in JPY (e.g. '19,800円' -> 19800)"""
+        if not self.price:
+            return None
+        digits = re.sub(r"[^\d]", "", str(self.price))
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except ValueError:
+            return None
 
 MAINTENANCE_KEYWORDS = [
     "メンテナンス",
@@ -238,6 +253,8 @@ class FC2Monitor:
         current_items: List[ShopItem],
         target_keywords: List[str],
         exclude_keywords: List[str],
+        min_price: Optional[int] = None,
+        max_price: Optional[int] = None,
         force_instock_trigger: bool = False
     ) -> List[Tuple[str, ShopItem]]:
         """
@@ -246,23 +263,33 @@ class FC2Monitor:
         - Brand new in-stock items ("NEW_IN_STOCK")
         - Restocked existing items ("RESTOCKED")
         - New out-of-stock announcements ("NEW_OUT_OF_STOCK")
+        Filters items by keywords and price range (min_price and max_price in JPY).
         """
         triggers: List[Tuple[str, ShopItem]] = []
 
         for item in current_items:
             title_lower = item.title.lower()
 
-            # Exclude check
+            # 1. Exclude keywords check
             if any(exc.lower() in title_lower for exc in exclude_keywords if exc):
                 continue
 
-            # Target keywords check
+            # 2. Target keywords check
             matches_target = True
             if target_keywords:
                 matches_target = any(kw.lower() in title_lower for kw in target_keywords if kw)
 
             if not matches_target:
                 continue
+
+            # 3. Price range check (0 or None means unlimited)
+            pv = item.price_value
+            if min_price and min_price > 0:
+                if pv is None or pv < min_price:
+                    continue
+            if max_price and max_price > 0:
+                if pv is None or pv > max_price:
+                    continue
 
             # If force trigger is active (e.g. right after maintenance ends)
             if force_instock_trigger and item.in_stock:
@@ -301,6 +328,8 @@ class FC2Monitor:
         target_keywords: List[str],
         exclude_keywords: List[str],
         scan_pages: int = 2,
+        min_price: Optional[int] = None,
+        max_price: Optional[int] = None,
         force_instock_trigger: bool = False
     ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]], bool]:
         """
@@ -335,5 +364,12 @@ class FC2Monitor:
                                 seen_ids.add(it.item_id)
                                 items.append(it)
 
-        triggers = self.check_matches(items, target_keywords, exclude_keywords, force_instock_trigger)
+        triggers = self.check_matches(
+            items,
+            target_keywords=target_keywords,
+            exclude_keywords=exclude_keywords,
+            min_price=min_price,
+            max_price=max_price,
+            force_instock_trigger=force_instock_trigger
+        )
         return items, triggers, False

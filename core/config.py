@@ -19,6 +19,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
           "なぁな"
         ],
         "exclude_keywords": [],
+        "min_price": 0,          # Minimum price in JPY (0 means no lower limit)
+        "max_price": 0,          # Maximum price in JPY (0 means no upper limit)
         "scan_pages": 2
     },
     "order": {
@@ -154,6 +156,16 @@ class ConfigManager:
             config.setdefault("notifications", {}).setdefault("discord", {})["webhook_url"] = webhook.strip()
             config["notifications"]["discord"]["enabled"] = True
             has_override = True
+
+        for p_key in ("SHOP_MIN_PRICE", "SHOP_MAX_PRICE"):
+            p_val = os.environ.get(p_key)
+            if p_val and p_val.strip():
+                try:
+                    cfg_field = "min_price" if p_key == "SHOP_MIN_PRICE" else "max_price"
+                    config.setdefault("shop", {})[cfg_field] = int(p_val.strip())
+                    has_override = True
+                except ValueError:
+                    pass
 
         # If any env override was applied, immediately persist to self.config_path so the web UI reads it
         if has_override:

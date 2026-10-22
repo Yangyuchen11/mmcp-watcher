@@ -13,6 +13,8 @@
       "なぁな"
     ],
     "exclude_keywords": [],
+    "min_price": 0,
+    "max_price": 0,
     "scan_pages": 2
   },
   "order": {

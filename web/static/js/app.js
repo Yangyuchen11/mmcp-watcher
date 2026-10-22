@@ -617,6 +617,11 @@ async function fetchConfig() {
     document.getElementById("cfg-keywords").value = (shop.target_keywords || []).join(", ");
     document.getElementById("cfg-exclude").value = (shop.exclude_keywords || []).join(", ");
     
+    const minPriceEl = document.getElementById("cfg-min-price");
+    if (minPriceEl) minPriceEl.value = (shop.min_price !== undefined) ? shop.min_price : 0;
+    const maxPriceEl = document.getElementById("cfg-max-price");
+    if (maxPriceEl) maxPriceEl.value = (shop.max_price !== undefined) ? shop.max_price : 0;
+
     const normalInterval = shop.interval_seconds || 3.0;
     const rushInterval = shop.rush_interval_seconds || 0.8;
     document.getElementById("cfg-interval").value = normalInterval;
@@ -727,6 +732,8 @@ async function saveConfig() {
     shop: {
       target_keywords: keywords,
       exclude_keywords: exclude,
+      min_price: parseInt(document.getElementById("cfg-min-price").value, 10) || 0,
+      max_price: parseInt(document.getElementById("cfg-max-price").value, 10) || 0,
       interval_seconds: parseFloat(document.getElementById("cfg-interval").value) || 3.0,
       rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8,
       scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2

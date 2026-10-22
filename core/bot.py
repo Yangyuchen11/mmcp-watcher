@@ -197,6 +197,8 @@ class BotEngine:
             target_keywords = shop_cfg.get("target_keywords", [])
             exclude_keywords = shop_cfg.get("exclude_keywords", [])
             scan_pages = shop_cfg.get("scan_pages", 2)
+            min_price = shop_cfg.get("min_price", 0)
+            max_price = shop_cfg.get("max_price", 0)
 
             try:
                 t0 = time.perf_counter()
@@ -205,6 +207,8 @@ class BotEngine:
                     target_keywords=target_keywords,
                     exclude_keywords=exclude_keywords,
                     scan_pages=scan_pages,
+                    min_price=min_price,
+                    max_price=max_price,
                     force_instock_trigger=False
                 )
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -237,7 +241,14 @@ class BotEngine:
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
                         # Re-evaluate triggers with force_instock_trigger on this cycle
-                        triggers = self.monitor.check_matches(items, target_keywords, exclude_keywords, force_instock_trigger=True)
+                        triggers = self.monitor.check_matches(
+                            items,
+                            target_keywords=target_keywords,
+                            exclude_keywords=exclude_keywords,
+                            min_price=min_price,
+                            max_price=max_price,
+                            force_instock_trigger=True
+                        )
 
                 if items:
                     self.stats["last_scan_status"] = f"OK ({len(items)}件最新商品, {elapsed_ms}ms)"

@@ -309,6 +309,17 @@
 
               <div class="form-row">
                 <div class="form-group">
+                  <label for="cfg-min-price" title="商品最低金额（日元），低于该价格的商品将自动忽略（不提醒不抢购）。0为不设下限">金额下限 (円，0为不限)</label>
+                  <input type="number" id="cfg-min-price" min="0" step="100" value="0" placeholder="0">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-max-price" title="商品最高金额（日元），高于该价格的商品将自动忽略（不提醒不抢购）。0为不设上限">金额上限 (円，0为不限)</label>
+                  <input type="number" id="cfg-max-price" min="0" step="100" value="0" placeholder="0">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
                   <label for="cfg-interval">日常巡检间隔 (秒)</label>
                   <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
                 </div>
