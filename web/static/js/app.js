@@ -626,6 +626,9 @@ async function fetchConfig() {
     if (qInterval) qInterval.value = normalInterval;
     if (qRush) qRush.value = rushInterval;
 
+    const scanPagesEl = document.getElementById("cfg-scan-pages");
+    if (scanPagesEl) scanPagesEl.value = shop.scan_pages || 2;
+
     // Order
     const order = cfg.order || {};
     document.getElementById("cfg-max-orders").value = (order.max_orders !== undefined) ? order.max_orders : 1;
@@ -721,7 +724,8 @@ async function saveConfig() {
       target_keywords: keywords,
       exclude_keywords: exclude,
       interval_seconds: parseFloat(document.getElementById("cfg-interval").value) || 3.0,
-      rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8
+      rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8,
+      scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2
     },
     order: {
       max_orders: isNaN(parseInt(document.getElementById("cfg-max-orders").value, 10)) ? 1 : parseInt(document.getElementById("cfg-max-orders").value, 10),
