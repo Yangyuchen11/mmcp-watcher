@@ -38,7 +38,26 @@ MAINTENANCE_KEYWORDS = [
     "ただいまメンテナンス",
     "メンテナンスを行っております",
     "只今、メンテナンス中です",
-    "ショップ準備中"
+    "ショップ準備中",
+    "開店準備中",
+    "準備中",
+    "改装中",
+    "休止中",
+    "一時休止",
+    "一時閉店",
+    "閉店中",
+    "休業中",
+    "販売準備",
+    "商品入れ替え",
+    "しばらくお待ち",
+    "カートを閉",
+    "閉鎖中",
+    "再開まで",
+    "closed",
+    "close",
+    "maintenance",
+    "under maintenance",
+    "coming soon"
 ]
 
 class FC2Monitor:
@@ -77,18 +96,43 @@ class FC2Monitor:
             return None, 0
 
     def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
-        """Detects whether FC2 Cart is currently in store maintenance mode before a drop"""
-        if status_code in (502, 503, 504):
+        """
+        Multi-layered bulletproof detection of FC2 Cart maintenance / storefront closure:
+        1. HTTP status code check (502, 503, 504, 423)
+        2. Broad keyword bank matching across full HTML text and title
+        3. Structural anomaly detection: on a store catalog page (?sort=5), if the normal
+           product container (.item_list, #itemlist_page, .item, etc.) is completely absent,
+           the storefront is closed for maintenance/restocking regardless of custom wording.
+        """
+        if status_code in (502, 503, 504, 423):
             return True
-        if not html:
+        if not html or len(html.strip()) < 50:
             return False
 
-        # If normal store product page container is missing and maintenance notice is present
-        has_items_container = "#itemlist_page" in html or "class=\"item_list\"" in html or "class='item_list'" in html
+        html_lower = html.lower()
+
+        # 1. Check explicit maintenance & closure keywords
+        for kw in MAINTENANCE_KEYWORDS:
+            if kw.lower() in html_lower:
+                return True
+
+        # 2. Structural check: does the catalog page contain standard FC2 product containers?
+        has_items_container = (
+            "#itemlist_page" in html_lower or
+            "class=\"item_list\"" in html_lower or
+            "class='item_list'" in html_lower or
+            "class=\"item\"" in html_lower or
+            "class='item'" in html_lower or
+            "dt class=\"name\"" in html_lower or
+            "dt class='name'" in html_lower or
+            "dl class=\"item\"" in html_lower or
+            "dl class='item'" in html_lower
+        )
+
+        # On Mamachapp catalog (which normally has 230+ products), if the entire product container
+        # is missing from the rendered HTML, the store is 100% in pre-drop maintenance / closed
         if not has_items_container:
-            for kw in MAINTENANCE_KEYWORDS:
-                if kw in html:
-                    return True
+            return True
 
         return False
 
