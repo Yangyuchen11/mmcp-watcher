@@ -75,6 +75,20 @@ function initEventHandlers() {
   // Save Config
   document.getElementById("btn-save-config").addEventListener("click", saveConfig);
 
+  // Reset Session
+  const btnReset = document.getElementById("btn-reset-session");
+  if (btnReset) {
+    btnReset.addEventListener("click", async () => {
+      try {
+        await fetch("/api/reset-session", { method: "POST" });
+        showToast("🔄 抢购会话已重置，计数与已购商品记录归零", "success");
+        fetchStatus();
+      } catch (e) {
+        showToast("重置失败: " + e, "error");
+      }
+    });
+  }
+
   // Test Notification
   document.getElementById("btn-test-notify").addEventListener("click", async () => {
     try {

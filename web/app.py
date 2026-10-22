@@ -75,6 +75,11 @@ def create_app(config_path: str = "config.json") -> FastAPI:
         dry = await bot.toggle_dry_run()
         return {"success": True, "dry_run": dry}
 
+    @app.post("/api/reset-session")
+    async def reset_session():
+        bot.reset_session()
+        return {"success": True, "message": "Session reset"}
+
     @app.get("/api/config")
     async def get_config():
         return bot.config

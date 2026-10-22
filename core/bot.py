@@ -79,9 +79,25 @@ class BotEngine:
         self.monitor.base_url = self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
         self.log("INFO", "配置已重新载入并生效")
 
+    def reset_session(self):
+        """Resets purchased items memory and counters to begin a fresh session"""
+        count = len(self.purchased_item_ids)
+        self.purchased_item_ids.clear()
+        self.in_progress_item_ids.clear()
+        self.stats["total_orders_succeeded"] = 0
+        self.stats["total_orders_attempted"] = 0
+        self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品，新一轮发售可重新抢购")
+
     async def start(self):
         if self.is_running:
             return
+
+        # If previous session completed the target orders, automatically start fresh
+        order_cfg = self.config.get("order", {})
+        max_orders = order_cfg.get("max_orders", 1)
+        if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+            self.reset_session()
+
         self.is_running = True
         self.stats["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log("INFO", "🚀 监控机器人已启动！开始巡检目标商城...")
