@@ -13,3 +13,13 @@ services:
       - PORT=8081
       - HOST=0.0.0.0
       - CONFIG_PATH=/app/data/config.json
+      - BUYER_NAME
+      - BUYER_NAME_KANA
+      - BUYER_EMAIL
+      - BUYER_TEL
+      - BUYER_POSTAL_CODE
+      - BUYER_PREFECTURE
+      - BUYER_ADDRESS
+      - BUYER_BIKO
+      - BUYER_PAYMENT
+      - DISCORD_WEBHOOK_URL

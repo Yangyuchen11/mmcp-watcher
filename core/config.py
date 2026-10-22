@@ -53,8 +53,33 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     }
 }
 
+def _load_dotenv_file():
+    """Reads key=value pairs from any .env file present in workdir or /app and loads into os.environ"""
+    candidates = [
+        Path(".env"),
+        Path("/app/.env"),
+        Path(__file__).resolve().parent.parent / ".env"
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("'").strip('"')
+                            if k:
+                                os.environ[k] = v
+                print(f"[Config] Successfully loaded environment variables from {candidate}")
+                break
+            except Exception as e:
+                print(f"[Config] Error reading {candidate}: {e}")
+
 class ConfigManager:
     def __init__(self, config_path: Optional[str] = None):
+        _load_dotenv_file()
         self.config_path = self._resolve_config_path(config_path)
         self.config = self.load()
 
@@ -117,15 +142,28 @@ class ConfigManager:
             "BUYER_BIKO": "biko",
             "BUYER_PAYMENT": "payment_method"
         }
+        has_override = False
         for env_key, dict_key in buyer_keys.items():
             val = os.environ.get(env_key)
-            if val:
-                config.setdefault("buyer", {})[dict_key] = val
+            if val and val.strip():
+                config.setdefault("buyer", {})[dict_key] = val.strip()
+                has_override = True
 
         webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-        if webhook:
-            config.setdefault("notifications", {}).setdefault("discord", {})["webhook_url"] = webhook
+        if webhook and webhook.strip():
+            config.setdefault("notifications", {}).setdefault("discord", {})["webhook_url"] = webhook.strip()
             config["notifications"]["discord"]["enabled"] = True
+            has_override = True
+
+        # If any env override was applied, immediately persist to self.config_path so the web UI reads it
+        if has_override:
+            try:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                print(f"[Config] Synced environment variables into {self.config_path}")
+            except Exception as e:
+                print(f"[Config] Note: Could not write env back to {self.config_path}: {e}")
 
         return config
 
