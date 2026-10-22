@@ -1,0 +1,66 @@
+{
+  "shop": {
+    "base_url": "https://mamachapptoy.cart.fc2.com",
+    "monitor_url": "https://mamachapptoy.cart.fc2.com/?sort=5",
+    "interval_seconds": 3.0,
+    "rush_interval_seconds": 0.8,
+    "rush_mode": false,
+    "target_keywords": [
+      "ロングメイド",
+      "ひなちゃん",
+      "ひよちゃん",
+      "ちぃち",
+      "なぁな"
+    ],
+    "exclude_keywords": [],
+    "max_pages": 1
+  },
+  "order": {
+    "auto_buy": true,
+    "dry_run": true,
+    "quantity": 1,
+    "max_orders": 1,
+    "retry_count": 3,
+    "retry_delay_seconds": 0.5
+  },
+  "buyer": {
+    "name": "楊　雨晨",
+    "name_kana": "ヨウウシン",
+    "email": "yyc285184831@gmail.com",
+    "tel": "08037304421",
+    "postal_code": "3510015",
+    "prefecture": "埼玉県",
+    "address": "朝霞市幸町",
+    "biko": "",
+    "payment_method": "代金引換"
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "chat_id": ""
+    },
+    "discord": {
+      "enabled": false,
+      "webhook_url": ""
+    },
+    "serverchan": {
+      "enabled": false,
+      "sendkey": ""
+    },
+    "bark": {
+      "enabled": false,
+      "server": "https://api.day.app",
+      "key": ""
+    },
+    "feishu": {
+      "enabled": false,
+      "webhook_url": ""
+    }
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "secret_token": ""
+  }
+}

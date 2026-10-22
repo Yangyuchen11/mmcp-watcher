@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MamaChapp FC2 监控与自动下单工具</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" type="image/x-icon" href="https://cart.fc2img.com/favicon.ico">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-icon">🧸</div>
+        <div class="brand-text">
+          <h1>MamaChapp FC2 <span>Watcher & Order Bot</span></h1>
+          <p class="target-sub">目标: <a href="https://mamachapptoy.cart.fc2.com/?sort=5" target="_blank" rel="noopener">mamachapptoy.cart.fc2.com</a></p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Rush Mode Switch -->
+        <button id="btn-toggle-rush" class="pill-btn rush-off" title="切换日常巡检 (3s) 与 抢购突击 (0.8s)">
+          <span class="icon">⚡</span>
+          <span class="label">极速抢购模式</span>
+          <span class="status-indicator">OFF</span>
+        </button>
+
+        <!-- Dry Run Mode Switch -->
+        <button id="btn-toggle-dry" class="pill-btn dry-on" title="开启后只模拟到确认页，不发起最终支付/扣款">
+          <span class="icon">🛡️</span>
+          <span class="label">模拟下单模式</span>
+          <span class="status-indicator">ON</span>
+        </button>
+
+        <!-- Start/Stop Button -->
+        <button id="btn-toggle-run" class="action-btn btn-success">
+          <span class="btn-icon">▶</span>
+          <span class="btn-text">启动监控</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Stat Metrics Ribbon -->
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="title">监控状态</span>
+          <span id="badge-status" class="badge badge-paused">⏸️ 已暂停</span>
+        </div>
+        <div class="metric-value" id="val-status-text">待命中</div>
+        <div class="metric-sub" id="val-last-scan">最后扫描: --:--:--</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="title">累计巡检</span>
+          <span class="badge badge-neutral">Scans</span>
+        </div>
+        <div class="metric-value" id="val-total-scans">0</div>
+        <div class="metric-sub" id="val-scan-speed">响应耗时: -- ms</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="title">发现目标商品</span>
+          <span class="badge badge-info">Matches</span>
+        </div>
+        <div class="metric-value" id="val-total-matches">0</div>
+        <div class="metric-sub">符合关键词或补货</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="title">自动下单执行</span>
+          <span class="badge badge-warning">Orders</span>
+        </div>
+        <div class="metric-value" id="val-orders-count">0 / 0</div>
+        <div class="metric-sub" id="val-orders-sub">成功数 / 尝试数</div>
+      </div>
+    </section>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      <!-- Left Panel: Tabs for Catalog, History, Terminal -->
+      <div class="primary-column">
+        <div class="tabs-nav">
+          <button class="tab-btn active" data-tab="tab-catalog">
+            <span class="tab-icon">🛍️</span>
+            <span>实时货架与商品</span>
+            <span class="tab-badge" id="catalog-count">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-history">
+            <span class="tab-icon">📜</span>
+            <span>下单记录</span>
+            <span class="tab-badge" id="history-count">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-logs">
+            <span class="tab-icon">💻</span>
+            <span>实时运行终端</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Catalog -->
+        <div class="tab-pane active" id="tab-catalog">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>商城最新商品一览 (按新着顺)</h3>
+              <p>实时抓取自商城最新排列，支持直接对任意商品进行模拟下单测试</p>
+            </div>
+            <div class="pane-tools">
+              <input type="text" id="catalog-filter" placeholder="筛选商品名称..." class="filter-input">
+            </div>
+          </div>
+
+          <div class="catalog-grid" id="catalog-items-container">
+            <div class="empty-state">
+              <div class="spinner"></div>
+              <p>正在同步商城商品列表...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Order History -->
+        <div class="tab-pane" id="tab-history">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>自动与手动下单执行流水</h3>
+              <p>包含加购耗时、结算填写、订单号及响应全流程</p>
+            </div>
+          </div>
+          <div class="history-container" id="history-items-container">
+            <div class="empty-state">暂无下单记录</div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Live Logs -->
+        <div class="tab-pane" id="tab-logs">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>实时控制台输出 (SSE Streaming)</h3>
+              <p>毫秒级追踪巡检、网络耗时、加购状态与报错</p>
+            </div>
+            <div class="pane-tools">
+              <button id="btn-clear-logs" class="btn-sm btn-ghost">清空日志</button>
+              <label class="auto-scroll-label">
+                <input type="checkbox" id="chk-auto-scroll" checked> 自动滚屏
+              </label>
+            </div>
+          </div>
+          <div class="terminal-box" id="terminal-logs">
+            <!-- Log entries injected here -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel: Settings / Buyer Profile -->
+      <aside class="sidebar-column">
+        <div class="card settings-card">
+          <div class="card-header">
+            <span class="card-icon">⚙️</span>
+            <h4>下单信息与配置</h4>
+            <button id="btn-save-config" class="btn-sm btn-primary">保存配置</button>
+          </div>
+
+          <div class="settings-body">
+            <!-- Buyer Info Section -->
+            <div class="section-group">
+              <h5 class="section-title">👤 收件人与地址 (FC2レジ)</h5>
+              
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-name">姓名 (お名前)</label>
+                  <input type="text" id="cfg-name" value="楊　雨晨">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-name-kana">片假名 (フリガナ)</label>
+                  <input type="text" id="cfg-name-kana" value="ヨウウシン">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-email">电子邮箱 (メールアドレス)</label>
+                <input type="email" id="cfg-email" value="yyc285184831@gmail.com">
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-tel">电话号码 (電話番号)</label>
+                  <input type="text" id="cfg-tel" value="08037304421">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-postcode">邮政编码 (郵便番号)</label>
+                  <input type="text" id="cfg-postcode" value="3510015">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-prefecture">都道府县 (都道府県)</label>
+                  <input type="text" id="cfg-prefecture" value="埼玉県">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-payment">支付方式</label>
+                  <input type="text" id="cfg-payment" value="代金引換" placeholder="优先代金引換">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-address">详细住址 (ご住所)</label>
+                <textarea id="cfg-address" rows="2">朝霞市幸町</textarea>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-biko">备注 (備考，可选)</label>
+                <input type="text" id="cfg-biko" placeholder="可选留言">
+              </div>
+            </div>
+
+            <!-- Monitoring Rules Section -->
+            <div class="section-group">
+              <h5 class="section-title">🎯 监控与抢购规则</h5>
+
+              <div class="form-group">
+                <label for="cfg-keywords">目标关键词 (逗号分隔，留空则监控所有新品)</label>
+                <input type="text" id="cfg-keywords" placeholder="如: ロングメイド, ひなちゃん, ちぃち">
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-exclude">排除关键词 (逗号分隔)</label>
+                <input type="text" id="cfg-exclude" placeholder="如: ソフビ, 怪獣">
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-interval">日常巡检间隔 (秒)</label>
+                  <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-rush-interval">极速巡检间隔 (秒)</label>
+                  <input type="number" id="cfg-rush-interval" step="0.1" min="0.3" value="0.8">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-max-orders">抢购成功后自动停止数</label>
+                  <input type="number" id="cfg-max-orders" min="1" value="1">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-quantity">单次购买数量</label>
+                  <input type="number" id="cfg-quantity" min="1" value="1">
+                </div>
+              </div>
+            </div>
+
+            <!-- Notifications Section -->
+            <div class="section-group">
+              <div class="section-header-flex">
+                <h5 class="section-title">🔔 消息通知推送</h5>
+                <button id="btn-test-notify" class="btn-xs btn-ghost">测试通知</button>
+              </div>
+
+              <!-- Telegram -->
+              <div class="notify-channel">
+                <div class="channel-header">
+                  <label class="switch-label">
+                    <input type="checkbox" id="chk-tg-enable">
+                    <span>Telegram 机器人</span>
+                  </label>
+                </div>
+                <div class="channel-inputs">
+                  <input type="text" id="cfg-tg-token" placeholder="Bot Token (如: 123456:ABC-DEF...)">
+                  <input type="text" id="cfg-tg-chatid" placeholder="Chat ID (如: 987654321)">
+                </div>
+              </div>
+
+              <!-- Discord -->
+              <div class="notify-channel">
+                <div class="channel-header">
+                  <label class="switch-label">
+                    <input type="checkbox" id="chk-dc-enable">
+                    <span>Discord Webhook</span>
+                  </label>
+                </div>
+                <div class="channel-inputs">
+                  <input type="text" id="cfg-dc-url" placeholder="Webhook URL">
+                </div>
+              </div>
+
+              <!-- ServerChan -->
+              <div class="notify-channel">
+                <div class="channel-header">
+                  <label class="switch-label">
+                    <input type="checkbox" id="chk-sc-enable">
+                    <span>Server酱 (微信推送)</span>
+                  </label>
+                </div>
+                <div class="channel-inputs">
+                  <input type="text" id="cfg-sc-key" placeholder="SendKey">
+                </div>
+              </div>
+
+              <!-- Bark -->
+              <div class="notify-channel">
+                <div class="channel-header">
+                  <label class="switch-label">
+                    <input type="checkbox" id="chk-bk-enable">
+                    <span>Bark (iOS推送)</span>
+                  </label>
+                </div>
+                <div class="channel-inputs">
+                  <input type="text" id="cfg-bk-key" placeholder="Bark Device Key">
+                </div>
+              </div>
+
+              <!-- Feishu -->
+              <div class="notify-channel">
+                <div class="channel-header">
+                  <label class="switch-label">
+                    <input type="checkbox" id="chk-fs-enable">
+                    <span>飞书 / Lark Webhook</span>
+                  </label>
+                </div>
+                <div class="channel-inputs">
+                  <input type="text" id="cfg-fs-url" placeholder="飞书群自定义机器人 Webhook URL">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Custom Checkout Test Modal -->
+  <div id="modal-test-order" class="modal-backdrop">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h4>🧪 自定义商品下单测试</h4>
+        <button class="modal-close" id="btn-close-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">输入商品 ID 进行完整结算链条测试（自动遵守顶部的模拟/实盘模式）。</p>
+        <div class="form-group">
+          <label for="modal-item-id">商品 ID (item_id)</label>
+          <input type="text" id="modal-item-id" placeholder="例如: 347">
+        </div>
+        <div class="form-group">
+          <label for="modal-item-name">商品名称 (备注用)</label>
+          <input type="text" id="modal-item-name" placeholder="如: ひなちゃん ロングメイド">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btn-cancel-modal">取消</button>
+        <button class="btn btn-primary" id="btn-submit-modal-test">立即测试</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

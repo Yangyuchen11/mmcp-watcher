@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  mamachapp-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mamachapp-bot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.json:/app/config.json
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - CONFIG_PATH=/app/config.json
