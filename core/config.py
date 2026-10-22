@@ -98,10 +98,36 @@ class ConfigManager:
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return self._deep_merge(DEFAULT_CONFIG, data)
+                merged = self._deep_merge(DEFAULT_CONFIG, data)
+                return self._apply_env_overrides(merged)
         except Exception as e:
             print(f"[Config] Error reading {self.config_path}: {e}. Using defaults.")
-            return json.loads(json.dumps(DEFAULT_CONFIG))
+            return self._apply_env_overrides(json.loads(json.dumps(DEFAULT_CONFIG)))
+
+    def _apply_env_overrides(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Applies environment variable overrides if provided (ideal for Dokploy Environment tab)"""
+        buyer_keys = {
+            "BUYER_NAME": "name",
+            "BUYER_NAME_KANA": "name_kana",
+            "BUYER_EMAIL": "email",
+            "BUYER_TEL": "tel",
+            "BUYER_POSTAL_CODE": "postal_code",
+            "BUYER_PREFECTURE": "prefecture",
+            "BUYER_ADDRESS": "address",
+            "BUYER_BIKO": "biko",
+            "BUYER_PAYMENT": "payment_method"
+        }
+        for env_key, dict_key in buyer_keys.items():
+            val = os.environ.get(env_key)
+            if val:
+                config.setdefault("buyer", {})[dict_key] = val
+
+        webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+        if webhook:
+            config.setdefault("notifications", {}).setdefault("discord", {})["webhook_url"] = webhook
+            config["notifications"]["discord"]["enabled"] = True
+
+        return config
 
     def _deep_merge(self, default: Dict[str, Any], custom: Dict[str, Any]) -> Dict[str, Any]:
         merged = json.loads(json.dumps(default))
