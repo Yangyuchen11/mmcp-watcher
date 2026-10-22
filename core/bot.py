@@ -311,7 +311,9 @@ class BotEngine:
                 checkout = FC2Checkout(
                     base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
                     buyer_info=self.config.get("buyer", {}),
-                    dry_run=order_cfg.get("dry_run", True)
+                    dry_run=order_cfg.get("dry_run", True),
+                    retry_count=order_cfg.get("retry_count", 3),
+                    retry_delay=order_cfg.get("retry_delay_seconds", 0.3)
                 )
 
                 res = await checkout.execute_checkout(
@@ -354,7 +356,9 @@ class BotEngine:
         checkout = FC2Checkout(
             base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
             buyer_info=self.config.get("buyer", {}),
-            dry_run=self.config.get("order", {}).get("dry_run", True)
+            dry_run=self.config.get("order", {}).get("dry_run", True),
+            retry_count=self.config.get("order", {}).get("retry_count", 3),
+            retry_delay=self.config.get("order", {}).get("retry_delay_seconds", 0.3)
         )
         res = await checkout.execute_checkout(
             item_id=item_id,

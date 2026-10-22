@@ -17,11 +17,15 @@ class FC2Checkout:
         self,
         base_url: str = "https://mamachapptoy.cart.fc2.com",
         buyer_info: Optional[Dict[str, Any]] = None,
-        dry_run: bool = True
+        dry_run: bool = True,
+        retry_count: int = 3,
+        retry_delay: float = 0.3
     ):
         self.base_url = base_url.rstrip("/")
         self.buyer_info = buyer_info or {}
         self.dry_run = dry_run
+        self.retry_count = max(1, retry_count)
+        self.retry_delay = max(0.1, retry_delay)
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -60,26 +64,39 @@ class FC2Checkout:
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
-        try:
-            t0 = time.perf_counter()
-            resp = await self.client.post(cart_in_url, data=post_data, headers=req_headers)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        last_error = ""
+        for attempt in range(1, self.retry_count + 1):
+            try:
+                t0 = time.perf_counter()
+                resp = await self.client.post(cart_in_url, data=post_data, headers=req_headers)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
-            if resp.status_code != 200:
-                return False, f"Cart_in HTTP Error {resp.status_code} ({elapsed_ms}ms)"
+                if resp.status_code != 200:
+                    last_error = f"Cart_in HTTP Error {resp.status_code} ({elapsed_ms}ms)"
+                    if resp.status_code in (500, 502, 503, 504) and attempt < self.retry_count:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
+                    return False, last_error
 
-            html = resp.text
-            # Check if cart is empty
-            if "カートに商品は入っていません" in html:
-                return False, f"加购失败：购物车为空，商品可能已售罄 ({elapsed_ms}ms)"
+                html = resp.text
+                # Check if cart is empty
+                if "カートに商品は入っていません" in html:
+                    return False, f"加购失败：购物车为空，商品可能已售罄 ({elapsed_ms}ms)"
 
-            # Check if checkout button exists
-            if "/regi" in html or "btn_submit_checkout" in html or "レジへすすむ" in html:
-                return True, f"加购成功！耗时: {elapsed_ms}ms"
+                # Check if checkout button exists
+                if "/regi" in html or "btn_submit_checkout" in html or "レジへすすむ" in html:
+                    prefix = f"[重试第{attempt}次成功] " if attempt > 1 else ""
+                    return True, f"{prefix}加购成功！耗时: {elapsed_ms}ms"
 
-            return True, f"加购已发送 ({elapsed_ms}ms)"
-        except Exception as e:
-            return False, f"加购网络异常: {e}"
+                return True, f"加购已发送 ({elapsed_ms}ms)"
+            except Exception as e:
+                last_error = f"加购网络异常: {e}"
+                if attempt < self.retry_count:
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                return False, last_error
+
+        return False, last_error
 
     async def get_regi_form(self) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -87,42 +104,55 @@ class FC2Checkout:
         Returns: (success, selected_payment_value, error_message)
         """
         regi_url = f"{self.base_url}/regi"
-        try:
-            resp = await self.client.get(regi_url)
-            if resp.status_code != 200:
-                return False, None, f"GET /regi returned HTTP {resp.status_code}"
+        last_error = ""
 
-            html = resp.text
-            if "カートにある商品が売り切れました" in html:
-                return False, None, "商品在结算时售罄 (カートにある商品が売り切れました)"
+        for attempt in range(1, self.retry_count + 1):
+            try:
+                resp = await self.client.get(regi_url)
+                if resp.status_code != 200:
+                    last_error = f"GET /regi returned HTTP {resp.status_code}"
+                    if resp.status_code in (500, 502, 503, 504) and attempt < self.retry_count:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
+                    return False, None, last_error
 
-            soup = BeautifulSoup(html, "html.parser")
-            payment_select = soup.select_one("select[name='payment_method']")
-            selected_val = ""
+                html = resp.text
+                if "カートにある商品が売り切れました" in html:
+                    return False, None, "商品在结算时售罄 (カートにある商品が売り切れました)"
 
-            if payment_select:
-                options = payment_select.find_all("option")
-                preferred = self.buyer_info.get("payment_method", "代金引換")
-                
-                # Try finding preferred method
-                for opt in options:
-                    opt_val = opt.get("value", "")
-                    opt_text = opt.get_text(strip=True)
-                    if preferred and (preferred in opt_text or preferred in opt_val):
-                        selected_val = opt_val
-                        break
+                soup = BeautifulSoup(html, "html.parser")
+                payment_select = soup.select_one("select[name='payment_method']")
+                selected_val = ""
 
-                # If not matched, pick first option with value
-                if not selected_val and options:
+                if payment_select:
+                    options = payment_select.find_all("option")
+                    preferred = self.buyer_info.get("payment_method", "代金引換")
+                    
+                    # Try finding preferred method
                     for opt in options:
-                        v = opt.get("value", "")
-                        if v:
-                            selected_val = v
+                        opt_val = opt.get("value", "")
+                        opt_text = opt.get_text(strip=True)
+                        if preferred and (preferred in opt_text or preferred in opt_val):
+                            selected_val = opt_val
                             break
 
-            return True, selected_val, None
-        except Exception as e:
-            return False, None, f"GET /regi 异常: {e}"
+                    # If not matched, pick first option with value
+                    if not selected_val and options:
+                        for opt in options:
+                            v = opt.get("value", "")
+                            if v:
+                                selected_val = v
+                                break
+
+                return True, selected_val, None
+            except Exception as e:
+                last_error = f"GET /regi 异常: {e}"
+                if attempt < self.retry_count:
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                return False, None, last_error
+
+        return False, None, last_error
 
     async def submit_regi_info(self, payment_method_val: str) -> Tuple[bool, Optional[str], str]:
         """
@@ -156,27 +186,40 @@ class FC2Checkout:
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
-        try:
-            t0 = time.perf_counter()
-            resp = await self.client.post(regi_url, data=post_data, headers=req_headers)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        last_error = ""
+        for attempt in range(1, self.retry_count + 1):
+            try:
+                t0 = time.perf_counter()
+                resp = await self.client.post(regi_url, data=post_data, headers=req_headers)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
-            if resp.status_code != 200:
-                return False, None, f"POST /regi HTTP Error {resp.status_code} ({elapsed_ms}ms)"
+                if resp.status_code != 200:
+                    last_error = f"POST /regi HTTP Error {resp.status_code} ({elapsed_ms}ms)"
+                    if resp.status_code in (500, 502, 503, 504) and attempt < self.retry_count:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
+                    return False, None, last_error
 
-            html = resp.text
-            # Check for error message
-            if "カートにある商品が売り切れました" in html:
-                return False, None, f"提交收件人信息时售罄: {elapsed_ms}ms"
+                html = resp.text
+                # Check for error message
+                if "カートにある商品が売り切れました" in html:
+                    return False, None, f"提交收件人信息时售罄: {elapsed_ms}ms"
 
-            soup = BeautifulSoup(html, "html.parser")
-            err_box = soup.select_one(".errormessage, .error")
-            if err_box and err_box.get_text(strip=True):
-                return False, None, f"表单校验错误: {err_box.get_text(strip=True)}"
+                soup = BeautifulSoup(html, "html.parser")
+                err_box = soup.select_one(".errormessage, .error")
+                if err_box and err_box.get_text(strip=True):
+                    return False, None, f"表单校验错误: {err_box.get_text(strip=True)}"
 
-            return True, html, f"收件信息提交成功 ({elapsed_ms}ms)"
-        except Exception as e:
-            return False, None, f"POST /regi 网络异常: {e}"
+                prefix = f"[重试第{attempt}次成功] " if attempt > 1 else ""
+                return True, html, f"{prefix}收件信息提交成功 ({elapsed_ms}ms)"
+            except Exception as e:
+                last_error = f"POST /regi 网络异常: {e}"
+                if attempt < self.retry_count:
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                return False, None, last_error
+
+        return False, None, last_error
 
     async def confirm_final_order(self, confirmation_html: str) -> Dict[str, Any]:
         """
