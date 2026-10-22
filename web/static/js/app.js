@@ -299,7 +299,7 @@ async function fetchConfig() {
 
     // Order
     const order = cfg.order || {};
-    document.getElementById("cfg-max-orders").value = order.max_orders || 1;
+    document.getElementById("cfg-max-orders").value = (order.max_orders !== undefined) ? order.max_orders : 1;
     document.getElementById("cfg-quantity").value = order.quantity || 1;
 
     // Notifications (Discord only)
@@ -344,7 +344,7 @@ async function saveConfig() {
       rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8
     },
     order: {
-      max_orders: parseInt(document.getElementById("cfg-max-orders").value, 10) || 1,
+      max_orders: isNaN(parseInt(document.getElementById("cfg-max-orders").value, 10)) ? 1 : parseInt(document.getElementById("cfg-max-orders").value, 10),
       quantity: parseInt(document.getElementById("cfg-quantity").value, 10) || 1
     },
     notifications: {

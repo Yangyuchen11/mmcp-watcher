@@ -35,6 +35,10 @@ class BotEngine:
         self.logs: deque = deque(maxlen=600)
         self._log_subscribers: List[asyncio.Queue] = []
 
+        # Track purchased and in-flight item IDs to prevent duplicate purchases of the same product
+        self.purchased_item_ids: set = set()
+        self.in_progress_item_ids: set = set()
+
     @property
     def config(self) -> Dict[str, Any]:
         return self.config_manager.config
@@ -179,46 +183,66 @@ class BotEngine:
         can_buy = event_type in ("NEW_IN_STOCK", "RESTOCKED")
 
         if auto_buy and can_buy:
-            max_orders = order_cfg.get("max_orders", 1)
-            if self.stats["total_orders_succeeded"] >= max_orders:
-                self.log("WARN", f"已达到最大允许下单数 ({max_orders})，跳过此次抢购")
+            # 1. Deduplication: check if this specific item has already been bought
+            if item.item_id in self.purchased_item_ids:
+                self.log("INFO", f"⏩ 商品 {item.title} (ID: {item.item_id}) 此前已成功下单，自动跳过以防同款重复购买")
                 return
 
+            # Check if this item is currently being checked out
+            if item.item_id in self.in_progress_item_ids:
+                return
+
+            # 2. Check max distinct items limit (0 means unlimited / buy all matching items)
+            max_orders = order_cfg.get("max_orders", 1)
+            if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+                self.log("WARN", f"已达到设定的最大购买款式数 ({len(self.purchased_item_ids)}/{max_orders} 款)，跳过此次抢购")
+                return
+
+            self.in_progress_item_ids.add(item.item_id)
             self.log("ORDER", f"⚡ 即刻触发极速下单流水线: {item.title} (ID: {item.item_id})...")
             self.stats["total_orders_attempted"] += 1
 
-            checkout = FC2Checkout(
-                base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
-                buyer_info=self.config.get("buyer", {}),
-                dry_run=order_cfg.get("dry_run", True)
-            )
+            try:
+                checkout = FC2Checkout(
+                    base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
+                    buyer_info=self.config.get("buyer", {}),
+                    dry_run=order_cfg.get("dry_run", True)
+                )
 
-            res = await checkout.execute_checkout(
-                item_id=item.item_id,
-                item_title=item.title,
-                item_url=item.url,
-                quantity=order_cfg.get("quantity", 1)
-            )
+                res = await checkout.execute_checkout(
+                    item_id=item.item_id,
+                    item_title=item.title,
+                    item_url=item.url,
+                    quantity=order_cfg.get("quantity", 1)
+                )
 
-            self.order_history.insert(0, res)
-            if len(self.order_history) > 50:
-                self.order_history.pop()
+                self.order_history.insert(0, res)
+                if len(self.order_history) > 50:
+                    self.order_history.pop()
 
-            order_title = f"{'🛡️ [模拟]' if res.get('dry_run') else '🎉 [实盘]'} 下单结果: {'成功' if res.get('success') else '未完成'}"
-            order_content = f"商品: {item.title}\n结果: {res.get('message')}\n耗时: {res.get('elapsed_seconds')}s\n"
-            if res.get("order_id"):
-                order_content += f"订单号: {res.get('order_id')}\n"
-            if res.get("timeline"):
-                order_content += "步骤流程:\n" + "\n".join(f"• {t}" for t in res.get("timeline", []))
+                order_title = f"{'🛡️ [模拟]' if res.get('dry_run') else '🎉 [实盘]'} 下单结果: {'成功' if res.get('success') else '未完成'}"
+                order_content = f"商品: {item.title}\n结果: {res.get('message')}\n耗时: {res.get('elapsed_seconds')}s\n"
+                if res.get("order_id"):
+                    order_content += f"订单号: {res.get('order_id')}\n"
+                if res.get("timeline"):
+                    order_content += "步骤流程:\n" + "\n".join(f"• {t}" for t in res.get("timeline", []))
 
-            self.log("ORDER" if res.get("success") else "ERROR", f"{order_title}: {res.get('message')}")
-            await self.dispatcher.broadcast(order_title, order_content, url=item.url)
+                self.log("ORDER" if res.get("success") else "ERROR", f"{order_title}: {res.get('message')}")
+                await self.dispatcher.broadcast(order_title, order_content, url=item.url)
 
-            if res.get("success"):
-                self.stats["total_orders_succeeded"] += 1
-                if self.stats["total_orders_succeeded"] >= max_orders:
-                    self.log("SUCCESS", f"已成功完成预期订单数 ({max_orders})，自动暂停监控以防重复下单")
-                    await self.stop()
+                if res.get("success"):
+                    # Record this item as purchased so it will NEVER be re-ordered
+                    self.purchased_item_ids.add(item.item_id)
+                    self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
+
+                    if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+                        self.log("SUCCESS", f"🎉 已成功抢齐预期款式数量 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止监控！")
+                        await self.stop()
+                    else:
+                        remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
+                        self.log("INFO", f"已成功抢下 1 款商品 (ID: {item.item_id})，当前已获 {len(self.purchased_item_ids)} 款，继续监控其余款式 ({remaining})")
+            finally:
+                self.in_progress_item_ids.discard(item.item_id)
 
     async def manual_test_checkout(self, item_id: str, custom_title: str = "测试商品") -> Dict[str, Any]:
         """Runs an on-demand checkout test (always respects dry_run setting, default True)"""
