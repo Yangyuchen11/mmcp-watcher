@@ -91,15 +91,47 @@ function initEventHandlers() {
 
   // Test Notification
   document.getElementById("btn-test-notify").addEventListener("click", async () => {
+    const url = document.getElementById("cfg-dc-url").value.trim();
+    if (!url) {
+      showToast("请先在下方输入框填写 Discord Webhook 链接！", "warn");
+      return;
+    }
     try {
-      showToast("正在发送测试通知...", "info");
-      const resp = await fetch("/api/test-notify", { method: "POST" });
+      showToast("正在向 Discord 发送测试通知...", "info");
+      const resp = await fetch("/api/test-notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ webhook_url: url })
+      });
       const data = await resp.json();
-      showToast("通知已分发，请在配置的客户端查收", "success");
+      if (resp.ok) {
+        showToast(data.message || "测试通知发送成功！请检查 Discord 频道。", "success");
+      } else {
+        showToast(data.detail || "测试失败，请检查 Webhook 链接或网络", "error");
+      }
     } catch (e) {
-      showToast("发送失败: " + e, "error");
+      showToast("测试请求失败: " + e.message, "error");
     }
   });
+
+  // Sync Full Catalog
+  const btnSync = document.getElementById("btn-sync-catalog");
+  if (btnSync) {
+    btnSync.addEventListener("click", async () => {
+      showToast("正在同步商城全量商品（约 1~2 秒）...", "info");
+      btnSync.disabled = true;
+      try {
+        const resp = await fetch("/api/sync-catalog", { method: "POST" });
+        const data = await resp.json();
+        showToast(`全量商品同步完成！共 ${data.count} 件，已按官方最新修改时间排序`, "success");
+        fetchStatus();
+      } catch (e) {
+        showToast("同步失败: " + e.message, "error");
+      } finally {
+        btnSync.disabled = false;
+      }
+    });
+  }
 
   // Clear Logs
   document.getElementById("btn-clear-logs").addEventListener("click", () => {
@@ -149,6 +181,16 @@ function renderStatus(data) {
   const dry = data.dry_run;
   const stats = data.stats;
 
+  // Maintenance banner check
+  const banner = document.getElementById("maintenance-alert-banner");
+  if (banner) {
+    if (data.is_in_maintenance) {
+      banner.style.display = "flex";
+    } else {
+      banner.style.display = "none";
+    }
+  }
+
   // Header Start/Stop Button
   const btnRun = document.getElementById("btn-toggle-run");
   if (isRunning) {
@@ -172,7 +214,11 @@ function renderStatus(data) {
   // Metrics
   const badgeStatus = document.getElementById("badge-status");
   const valStatusText = document.getElementById("val-status-text");
-  if (isRunning) {
+  if (data.is_in_maintenance) {
+    badgeStatus.className = "badge badge-running";
+    badgeStatus.textContent = "🚨 商城维护中 (0.8s 突击)";
+    valStatusText.textContent = "⚡ 发售前警戒";
+  } else if (isRunning) {
     badgeStatus.className = "badge badge-running";
     badgeStatus.textContent = "🟢 运行中";
     valStatusText.textContent = rush ? "⚡ 极速突击" : "日常巡检";
@@ -191,7 +237,8 @@ function renderStatus(data) {
   // Catalog
   if (data.recent_items && data.recent_items.length > 0) {
     catalogItems = data.recent_items;
-    document.getElementById("catalog-count").textContent = catalogItems.length;
+    const totalCount = data.catalog_total || catalogItems.length;
+    document.getElementById("catalog-count").textContent = totalCount;
     renderCatalog(catalogItems);
   }
 

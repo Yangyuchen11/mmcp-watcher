@@ -27,17 +27,20 @@ class BotEngine:
             "total_orders_attempted": 0,
             "total_orders_succeeded": 0,
             "last_scan_time": None,
-            "last_scan_status": "Idle"
+            "last_scan_status": "Idle",
+            "is_in_maintenance": False
         }
 
         self.recent_items: List[Dict[str, Any]] = []
+        self.all_catalog_items: List[Dict[str, Any]] = []
         self.order_history: List[Dict[str, Any]] = []
         self.logs: deque = deque(maxlen=600)
         self._log_subscribers: List[asyncio.Queue] = []
 
-        # Track purchased and in-flight item IDs to prevent duplicate purchases of the same product
+        # Session deduplication
         self.purchased_item_ids: set = set()
         self.in_progress_item_ids: set = set()
+        self.is_in_maintenance: bool = False
 
     @property
     def config(self) -> Dict[str, Any]:
@@ -60,7 +63,6 @@ class BotEngine:
             except Exception:
                 pass
 
-        # Broadcast to active SSE listeners
         for q in list(self._log_subscribers):
             try:
                 q.put_nowait(entry)
@@ -88,11 +90,24 @@ class BotEngine:
         self.stats["total_orders_attempted"] = 0
         self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品，新一轮发售可重新抢购")
 
+    async def sync_full_catalog(self) -> int:
+        """Background worker that syncs the entire store catalog (230+ items) in sort=5 order"""
+        try:
+            self.log("INFO", "📦 正在拉取商城全量货架商品列表（按官方最新修改时间排序）...")
+            items = await self.monitor.scan_full_catalog(max_pages=15)
+            if items:
+                self.all_catalog_items = [it.to_dict() for it in items]
+                self.recent_items = self.all_catalog_items
+                self.log("SUCCESS", f"✅ 商城全量商品已同步完成！共索引 {len(items)} 款商品，已按官方最新修改时间从新到旧排列")
+                return len(items)
+        except Exception as e:
+            self.log("WARN", f"全量商品同步异常: {e}")
+        return 0
+
     async def start(self):
         if self.is_running:
             return
 
-        # If previous session completed the target orders, automatically start fresh
         order_cfg = self.config.get("order", {})
         max_orders = order_cfg.get("max_orders", 1)
         if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
@@ -101,6 +116,9 @@ class BotEngine:
         self.is_running = True
         self.stats["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log("INFO", "🚀 监控机器人已启动！开始巡检目标商城...")
+        
+        # Async trigger full catalog sync on startup
+        asyncio.create_task(self.sync_full_catalog())
         self.monitor_task = asyncio.create_task(self._monitor_loop())
 
     async def stop(self):
@@ -136,30 +154,66 @@ class BotEngine:
     async def _monitor_loop(self):
         while self.is_running:
             shop_cfg = self.config.get("shop", {})
-            order_cfg = self.config.get("order", {})
-
             monitor_url = shop_cfg.get("monitor_url", "https://mamachapptoy.cart.fc2.com/?sort=5")
-            rush_mode = shop_cfg.get("rush_mode", False)
+            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance
             interval = shop_cfg.get("rush_interval_seconds", 0.8) if rush_mode else shop_cfg.get("interval_seconds", 3.0)
             target_keywords = shop_cfg.get("target_keywords", [])
             exclude_keywords = shop_cfg.get("exclude_keywords", [])
+            scan_pages = shop_cfg.get("scan_pages", 2)
 
             try:
                 t0 = time.perf_counter()
-                items, triggers = await self.monitor.check_once(
+                items, triggers, is_maintenance = await self.monitor.check_once(
                     monitor_url=monitor_url,
                     target_keywords=target_keywords,
-                    exclude_keywords=exclude_keywords
+                    exclude_keywords=exclude_keywords,
+                    scan_pages=scan_pages,
+                    force_instock_trigger=False
                 )
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
                 self.stats["total_scans"] += 1
                 self.stats["last_scan_time"] = datetime.datetime.now().strftime("%H:%M:%S")
+                self.stats["is_in_maintenance"] = is_maintenance
+
+                # Handle Maintenance Mode Transition
+                if is_maintenance:
+                    if not self.is_in_maintenance:
+                        self.is_in_maintenance = True
+                        self.log("WARN", "🚨 【发售前维护侦测】检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询！")
+                        await self.dispatcher.broadcast(
+                            title="🚨 【发售前维护预警】Mamachapp 商城进入维护状态！",
+                            content="店铺已进入维护模式，这是发售前补库存的明确信号！\n机器人已自动切换为最高警戒极速抢购模式（0.8s 轮询），一旦维护结束开售立即抢购！",
+                            url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
+                        )
+                    self.stats["last_scan_status"] = f"维护中 (Maintenance, {elapsed_ms}ms)"
+                    await asyncio.sleep(interval)
+                    continue
+                else:
+                    # If just exited maintenance!
+                    if self.is_in_maintenance:
+                        self.is_in_maintenance = False
+                        self.log("SUCCESS", "⚡ 【维护结束！新品开售！】商城已恢复访问，正在以毫秒级速度执行全量库存扫描与抢购！")
+                        await self.dispatcher.broadcast(
+                            title="⚡ 【维护结束！新品开售！】Mamachapp 商城已开售！",
+                            content="店铺维护已完成，商城已重新开放！机器人正在毫秒级扫描新上架及补货商品，一有库存即刻下单！",
+                            url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
+                        )
+                        # Re-evaluate triggers with force_instock_trigger on this cycle
+                        triggers = self.monitor.check_matches(items, target_keywords, exclude_keywords, force_instock_trigger=True)
 
                 if items:
-                    self.stats["last_scan_status"] = f"OK ({len(items)}件商品, {elapsed_ms}ms)"
-                    # Cache latest items for web view
-                    self.recent_items = [it.to_dict() for it in items[:30]]
+                    self.stats["last_scan_status"] = f"OK ({len(items)}件最新商品, {elapsed_ms}ms)"
+                    # Update local view if all_catalog_items not yet populated
+                    if not self.all_catalog_items:
+                        self.recent_items = [it.to_dict() for it in items]
+                    else:
+                        # Update top items in all_catalog_items
+                        top_dict = {it.item_id: it.to_dict() for it in items}
+                        for idx, existing in enumerate(self.all_catalog_items):
+                            if existing["item_id"] in top_dict:
+                                self.all_catalog_items[idx] = top_dict[existing["item_id"]]
+                        self.recent_items = self.all_catalog_items
                 else:
                     self.stats["last_scan_status"] = f"Empty/Warn ({elapsed_ms}ms)"
 
@@ -178,7 +232,7 @@ class BotEngine:
     async def _handle_trigger(self, event_type: str, item: ShopItem):
         event_name_map = {
             "NEW_IN_STOCK": "🔥 发现新商品上架且有货！",
-            "RESTOCKED": "⚡ 商品补货！",
+            "RESTOCKED": "⚡ 现有商品补货在库！",
             "NEW_OUT_OF_STOCK": "ℹ️ 发现新上架商品（暂无库存）"
         }
         title = event_name_map.get(event_type, f"商品动态: {event_type}")
@@ -193,22 +247,20 @@ class BotEngine:
             extra={"image_url": item.image_url}
         )
 
-        # Trigger auto-buy if eligible
+        # Trigger auto-buy for any in-stock trigger
         order_cfg = self.config.get("order", {})
         auto_buy = order_cfg.get("auto_buy", True)
         can_buy = event_type in ("NEW_IN_STOCK", "RESTOCKED")
 
         if auto_buy and can_buy:
-            # 1. Deduplication: check if this specific item has already been bought
+            # Deduplication: check if this specific item has already been bought
             if item.item_id in self.purchased_item_ids:
                 self.log("INFO", f"⏩ 商品 {item.title} (ID: {item.item_id}) 此前已成功下单，自动跳过以防同款重复购买")
                 return
 
-            # Check if this item is currently being checked out
             if item.item_id in self.in_progress_item_ids:
                 return
 
-            # 2. Check max distinct items limit (0 means unlimited / buy all matching items)
             max_orders = order_cfg.get("max_orders", 1)
             if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
                 self.log("WARN", f"已达到设定的最大购买款式数 ({len(self.purchased_item_ids)}/{max_orders} 款)，跳过此次抢购")
@@ -247,7 +299,6 @@ class BotEngine:
                 await self.dispatcher.broadcast(order_title, order_content, url=item.url)
 
                 if res.get("success"):
-                    # Record this item as purchased so it will NEVER be re-ordered
                     self.purchased_item_ids.add(item.item_id)
                     self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
 

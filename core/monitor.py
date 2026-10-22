@@ -26,12 +26,21 @@ class ShopItem:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+MAINTENANCE_KEYWORDS = [
+    "メンテナンス",
+    "只今メンテナンス中",
+    "ただいまメンテナンス",
+    "メンテナンスを行っております",
+    "只今、メンテナンス中です",
+    "ショップ準備中"
+]
+
 class FC2Monitor:
     def __init__(self, base_url: str = "https://mamachapptoy.cart.fc2.com", client: Optional[httpx.AsyncClient] = None):
         self.base_url = base_url.rstrip("/")
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache"
@@ -50,27 +59,37 @@ class FC2Monitor:
             )
         return self.client
 
-    async def fetch_page(self, url: str) -> Optional[str]:
+    async def fetch_page(self, url: str) -> Tuple[Optional[str], int]:
         client = await self._get_client()
         try:
             resp = await client.get(url)
-            if resp.status_code == 200:
-                return resp.text
-            else:
-                print(f"[Monitor] Fetch {url} returned status {resp.status_code}")
-                return None
+            return resp.text, resp.status_code
         except Exception as e:
             print(f"[Monitor] Network error fetching {url}: {e}")
-            return None
+            return None, 0
+
+    def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
+        """Detects whether FC2 Cart is currently in store maintenance mode before a drop"""
+        if status_code in (502, 503, 504):
+            return True
+        if not html:
+            return False
+
+        # If normal store product page container is missing and maintenance notice is present
+        has_items_container = "#itemlist_page" in html or "class=\"item_list\"" in html or "class='item_list'" in html
+        if not has_items_container:
+            for kw in MAINTENANCE_KEYWORDS:
+                if kw in html:
+                    return True
+
+        return False
 
     def parse_items_from_html(self, html: str) -> List[ShopItem]:
         soup = BeautifulSoup(html, "html.parser")
         items: List[ShopItem] = []
 
-        # FC2 standard layout: .item_list li.item
         item_nodes = soup.select(".item_list li.item, .item_list .item")
         if not item_nodes:
-            # Fallback selector for alternative template styles
             item_nodes = soup.select("#itemlist_page dl, .contents .item")
 
         for node in item_nodes:
@@ -83,7 +102,6 @@ class FC2Monitor:
             full_url = urljoin(self.base_url, relative_url)
 
             # 2. Extract item_id
-            # Pattern: /ca<cat>/<item_id>/...
             item_id = ""
             category_id = None
             match = re.search(r"/ca(\d+)/(\d+)/", relative_url)
@@ -91,7 +109,6 @@ class FC2Monitor:
                 category_id = match.group(1)
                 item_id = match.group(2)
             else:
-                # Try hidden inputs if present
                 hidden_id = node.select_one("input[name='item_id']")
                 if hidden_id and hidden_id.get("value"):
                     item_id = hidden_id["value"]
@@ -120,7 +137,6 @@ class FC2Monitor:
             stock_text = stock_node.get_text(strip=True) if stock_node else ""
 
             # In FC2, "在庫切れ" means out of stock.
-            # If stock_text does not contain "在庫切れ" and there is stock info or cart button, it's in stock.
             has_soldout = "在庫切れ" in stock_text or "完売" in stock_text
             has_cart_button = bool(node.select_one(".btn_submit_cart, input[value='カートに入れる']"))
 
@@ -140,24 +156,48 @@ class FC2Monitor:
 
         return items
 
+    async def scan_full_catalog(self, max_pages: int = 15) -> List[ShopItem]:
+        """
+        Scans all pages in the store in parallel, ordered by sort=5 (newest update first).
+        Covers the entire product inventory (230+ items).
+        """
+        tasks = [self.fetch_page(f"{self.base_url}/?sort=5&page={p}") for p in range(max_pages)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_items: List[ShopItem] = []
+        seen_ids = set()
+
+        for res in results:
+            if isinstance(res, tuple) and res[0]:
+                html, _ = res
+                page_items = self.parse_items_from_html(html)
+                for it in page_items:
+                    if it.item_id not in seen_ids:
+                        seen_ids.add(it.item_id)
+                        all_items.append(it)
+                        # Also register in known_items so monitor knows them
+                        if it.item_id not in self.known_items:
+                            self.known_items[it.item_id] = it
+
+        return all_items
+
     def check_matches(
         self,
         current_items: List[ShopItem],
         target_keywords: List[str],
-        exclude_keywords: List[str]
+        exclude_keywords: List[str],
+        force_instock_trigger: bool = False
     ) -> List[Tuple[str, ShopItem]]:
         """
         Compares current items with known snapshot.
-        Returns a list of tuples: (event_type, item)
-        event_type can be:
-        - "NEW_IN_STOCK": Newly listed item that has stock
-        - "RESTOCKED": Previously known item whose stock transitioned from False -> True
-        - "NEW_OUT_OF_STOCK": Newly listed item, currently out of stock (for notifications)
+        Detects:
+        - Brand new in-stock items ("NEW_IN_STOCK")
+        - Restocked existing items ("RESTOCKED")
+        - New out-of-stock announcements ("NEW_OUT_OF_STOCK")
         """
         triggers: List[Tuple[str, ShopItem]] = []
 
         for item in current_items:
-            # Check keyword filters
             title_lower = item.title.lower()
 
             # Exclude check
@@ -172,17 +212,27 @@ class FC2Monitor:
             if not matches_target:
                 continue
 
-            # Compare against known snapshot
+            # If force trigger is active (e.g. right after maintenance ends)
+            if force_instock_trigger and item.in_stock:
+                triggers.append(("NEW_IN_STOCK", item))
+                self.known_items[item.item_id] = item
+                continue
+
+            # Regular comparison against snapshot
             if item.item_id not in self.known_items:
                 if self.is_initialized:
                     if item.in_stock:
                         triggers.append(("NEW_IN_STOCK", item))
                     else:
                         triggers.append(("NEW_OUT_OF_STOCK", item))
-                # Add to known
+                else:
+                    # On first startup: if item is already in stock, trigger it!
+                    if item.in_stock:
+                        triggers.append(("NEW_IN_STOCK", item))
                 self.known_items[item.item_id] = item
             else:
                 prev_item = self.known_items[item.item_id]
+                # If an existing item transitioned from out-of-stock to in-stock!
                 if not prev_item.in_stock and item.in_stock:
                     triggers.append(("RESTOCKED", item))
                 # Update snapshot
@@ -197,39 +247,41 @@ class FC2Monitor:
         self,
         monitor_url: str,
         target_keywords: List[str],
-        exclude_keywords: List[str]
-    ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]]]:
+        exclude_keywords: List[str],
+        scan_pages: int = 2,
+        force_instock_trigger: bool = False
+    ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]], bool]:
         """
         Performs one monitoring scan.
-        Returns: (all_parsed_items, trigger_events)
+        Supports multi-page scanning for top pages where drops occur.
+        Returns: (parsed_items, trigger_events, is_maintenance)
         """
-        html = await self.fetch_page(monitor_url)
-        if not html:
-            return [], []
+        # If scan_pages == 1: single request
+        if scan_pages <= 1:
+            html, status = await self.fetch_page(monitor_url)
+            if self.check_maintenance(html, status):
+                return [], [], True
+            if not html:
+                return [], [], False
+            items = self.parse_items_from_html(html)
+        else:
+            # Parallel scan of top pages (e.g. page 0 and page 1)
+            base_query = monitor_url.split("?")[0]
+            tasks = [self.fetch_page(f"{base_query}?sort=5&page={p}") for p in range(scan_pages)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        items = self.parse_items_from_html(html)
-        triggers = self.check_matches(items, target_keywords, exclude_keywords)
-        return items, triggers
+            items = []
+            seen_ids = set()
+            for res in results:
+                if isinstance(res, tuple):
+                    html, status = res
+                    if self.check_maintenance(html, status):
+                        return [], [], True
+                    if html:
+                        for it in self.parse_items_from_html(html):
+                            if it.item_id not in seen_ids:
+                                seen_ids.add(it.item_id)
+                                items.append(it)
 
-    async def verify_item_stock_direct(self, item_url: str) -> bool:
-        """
-        Fetches the item detail page to verify real-time stock status.
-        Useful for high-confidence stock checks before triggering checkout.
-        """
-        html = await self.fetch_page(item_url)
-        if not html:
-            return False
-
-        soup = BeautifulSoup(html, "html.parser")
-        stock_node = soup.select_one("li.stock, .stock")
-        if stock_node and ("在庫切れ" in stock_node.text or "完売" in stock_node.text):
-            return False
-
-        # Check form data-submit
-        basket_form = soup.select_one("form.basket")
-        if basket_form:
-            submit_data = basket_form.get("data-submit")
-            if submit_data == "0":
-                return False
-
-        return True
+        triggers = self.check_matches(items, target_keywords, exclude_keywords, force_instock_trigger)
+        return items, triggers, False

@@ -13,7 +13,7 @@
       "なぁな"
     ],
     "exclude_keywords": [],
-    "max_pages": 1
+    "scan_pages": 2
   },
   "order": {
     "auto_buy": true,

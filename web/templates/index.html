@@ -45,6 +45,11 @@
       </div>
     </header>
 
+    <!-- Pre-release Maintenance Alert Banner -->
+    <div id="maintenance-alert-banner" class="maintenance-alert-banner" style="display:none;">
+      🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（0.8s），开售后毫秒级抢购！
+    </div>
+
     <!-- Stat Metrics Ribbon -->
     <section class="metrics-grid">
       <div class="metric-card">
@@ -109,11 +114,12 @@
         <div class="tab-pane active" id="tab-catalog">
           <div class="pane-header">
             <div class="pane-title-group">
-              <h3>商城最新商品一览 (按新着顺)</h3>
-              <p>实时抓取自商城最新排列，支持直接对任意商品进行模拟下单测试</p>
+              <h3>商城全量商品一览 (按新着更新順)</h3>
+              <p>涵盖商城全部 12 页 230+ 件商品，按官方最新修改时间降序排列，支持任意商品下单测试</p>
             </div>
-            <div class="pane-tools">
-              <input type="text" id="catalog-filter" placeholder="筛选商品名称..." class="filter-input">
+            <div class="pane-tools" style="display:flex;align-items:center;gap:10px;">
+              <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="扫描并拉取商城全部 12 页共 230+ 件商品">🔄 刷新全量商品</button>
+              <input type="text" id="catalog-filter" placeholder="筛选商品名称或ID..." class="filter-input">
             </div>
           </div>
 

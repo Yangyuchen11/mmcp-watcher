@@ -960,3 +960,24 @@ body {
   justify-content: flex-end;
   gap: 10px;
 }
+
+/* Maintenance Banner */
+.maintenance-alert-banner {
+  background: linear-gradient(90deg, #991b1b, #dc2626);
+  color: #fff;
+  padding: 10px 24px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-bottom: 1px solid #ef4444;
+  animation: pulseMaintenance 2s infinite ease-in-out;
+}
+
+@keyframes pulseMaintenance {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+

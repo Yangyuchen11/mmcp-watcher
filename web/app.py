@@ -44,16 +44,24 @@ def create_app(config_path: str = "config.json") -> FastAPI:
 
     @app.get("/api/status")
     async def get_status():
+        catalog_display = bot.all_catalog_items if bot.all_catalog_items else bot.recent_items
         return {
             "is_running": bot.is_running,
             "rush_mode": bot.config.get("shop", {}).get("rush_mode", False),
             "dry_run": bot.config.get("order", {}).get("dry_run", True),
             "auto_buy": bot.config.get("order", {}).get("auto_buy", True),
             "stats": bot.stats,
-            "recent_items": bot.recent_items,
+            "recent_items": catalog_display,
+            "catalog_total": len(catalog_display),
+            "is_in_maintenance": bot.is_in_maintenance,
             "order_history": bot.order_history[:10],
             "config": bot.config
         }
+
+    @app.post("/api/sync-catalog")
+    async def sync_catalog():
+        count = await bot.sync_full_catalog()
+        return {"success": True, "count": count}
 
     @app.post("/api/start")
     async def start_bot():
@@ -104,14 +112,33 @@ def create_app(config_path: str = "config.json") -> FastAPI:
         return res
 
     @app.post("/api/test-notify")
-    async def test_notify():
-        await bot.dispatcher.broadcast(
-            title="🔔 [测试通知] Mamachapp 监控机器人",
-            content="这是一条连通性测试消息，如果您收到此消息，说明通知渠道配置正确！",
+    async def test_notify(payload: Optional[Dict[str, Any]] = None):
+        webhook_url = ""
+        if payload and isinstance(payload, dict):
+            webhook_url = str(payload.get("webhook_url", "")).strip()
+
+        if not webhook_url:
+            webhook_url = bot.config.get("notifications", {}).get("discord", {}).get("webhook_url", "").strip()
+
+        if not webhook_url:
+            raise HTTPException(
+                status_code=400,
+                detail="未填写 Discord Webhook 地址！请在右侧输入框填写以 https://discord.com/api/webhooks/... 开头的链接"
+            )
+
+        from notifiers.discord import DiscordNotifier
+        notifier = DiscordNotifier(webhook_url=webhook_url, enabled=True)
+        ok, msg = await notifier.send_with_result(
+            title="🔔 [连通测试] Mamachapp 监控机器人",
+            content="这是一条连通性测试消息，如果您收到此消息，说明 Discord Webhook 配置完全成功！\n- 监控目标: mamachapptoy.cart.fc2.com\n- 排序模式: 官方新着更新順 (sort=5)\n- 发售监控: 已进入高灵敏度就绪状态",
             url=bot.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
         )
-        bot.log("INFO", "已向所有启用的通知渠道发送测试通知")
-        return {"success": True, "message": "Test notification dispatched"}
+        if ok:
+            bot.log("SUCCESS", f"Discord Webhook 测试成功发送至: {webhook_url[:35]}...")
+            return {"success": True, "message": "✅ 测试消息已成功送达 Discord！请前往频道查收。"}
+        else:
+            bot.log("ERROR", f"Discord Webhook 测试发送失败: {msg}")
+            raise HTTPException(status_code=400, detail=f"Discord 发送失败: {msg}")
 
     @app.get("/api/logs")
     async def get_logs():

@@ -8,8 +8,8 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - ./config.json:/app/config.json
+      - ./data:/app/data
     environment:
       - PORT=8081
       - HOST=0.0.0.0
-      - CONFIG_PATH=/app/config.json
+      - CONFIG_PATH=/app/data/config.json
