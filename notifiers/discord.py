@@ -3,8 +3,9 @@ from typing import Dict, Any, Optional, Tuple
 from .base import BaseNotifier
 
 class DiscordNotifier(BaseNotifier):
-    def __init__(self, webhook_url: str):
-        self.webhook_url = webhook_url.strip()
+    def __init__(self, webhook_url: str = "", enabled: bool = True, **kwargs):
+        self.webhook_url = (webhook_url or "").strip()
+        self.enabled = enabled
 
     async def send(self, title: str, content: str, url: str = "", extra: Optional[Dict[str, Any]] = None) -> bool:
         ok, _ = await self.send_with_result(title, content, url, extra)

@@ -104,11 +104,18 @@ function initEventHandlers() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ webhook_url: url })
       });
-      const data = await resp.json();
-      if (resp.ok) {
+      let data = {};
+      const rawText = await resp.text();
+      try {
+        data = JSON.parse(rawText);
+      } catch (err) {
+        data = { detail: rawText || "服务器未返回有效内容" };
+      }
+
+      if (resp.ok && data.success !== false) {
         showToast(data.message || "测试通知发送成功！请检查 Discord 频道。", "success");
       } else {
-        showToast(data.detail || "测试失败，请检查 Webhook 链接或网络", "error");
+        showToast(data.detail || data.message || "测试失败，请检查 Webhook 链接或网络", "error");
       }
     } catch (e) {
       showToast("测试请求失败: " + e.message, "error");

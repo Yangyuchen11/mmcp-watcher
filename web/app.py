@@ -124,32 +124,42 @@ def create_app(config_path: str = "config.json") -> FastAPI:
 
     @app.post("/api/test-notify")
     async def test_notify(payload: Optional[Dict[str, Any]] = None):
-        webhook_url = ""
-        if payload and isinstance(payload, dict):
-            webhook_url = str(payload.get("webhook_url", "")).strip()
+        try:
+            webhook_url = ""
+            if payload and isinstance(payload, dict):
+                webhook_url = str(payload.get("webhook_url", "")).strip()
 
-        if not webhook_url:
-            webhook_url = bot.config.get("notifications", {}).get("discord", {}).get("webhook_url", "").strip()
+            if not webhook_url:
+                webhook_url = bot.config.get("notifications", {}).get("discord", {}).get("webhook_url", "").strip()
 
-        if not webhook_url:
-            raise HTTPException(
-                status_code=400,
-                detail="未填写 Discord Webhook 地址！请在右侧输入框填写以 https://discord.com/api/webhooks/... 开头的链接"
+            if not webhook_url:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "detail": "未填写 Discord Webhook 地址！请在右侧输入框填写以 https://discord.com/api/webhooks/... 开头的链接"}
+                )
+
+            from notifiers.discord import DiscordNotifier
+            notifier = DiscordNotifier(webhook_url=webhook_url, enabled=True)
+            ok, msg = await notifier.send_with_result(
+                title="🔔 [连通测试] Mamachapp 监控机器人",
+                content="这是一条连通性测试消息，如果您收到此消息，说明 Discord Webhook 配置完全成功！\n- 监控目标: mamachapptoy.cart.fc2.com\n- 排序模式: 官方新着更新順 (sort=5)\n- 发售监控: 已进入高灵敏度就绪状态",
+                url=bot.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
             )
-
-        from notifiers.discord import DiscordNotifier
-        notifier = DiscordNotifier(webhook_url=webhook_url, enabled=True)
-        ok, msg = await notifier.send_with_result(
-            title="🔔 [连通测试] Mamachapp 监控机器人",
-            content="这是一条连通性测试消息，如果您收到此消息，说明 Discord Webhook 配置完全成功！\n- 监控目标: mamachapptoy.cart.fc2.com\n- 排序模式: 官方新着更新順 (sort=5)\n- 发售监控: 已进入高灵敏度就绪状态",
-            url=bot.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
-        )
-        if ok:
-            bot.log("SUCCESS", f"Discord Webhook 测试成功发送至: {webhook_url[:35]}...")
-            return {"success": True, "message": "✅ 测试消息已成功送达 Discord！请前往频道查收。"}
-        else:
-            bot.log("ERROR", f"Discord Webhook 测试发送失败: {msg}")
-            raise HTTPException(status_code=400, detail=f"Discord 发送失败: {msg}")
+            if ok:
+                bot.log("SUCCESS", f"Discord Webhook 测试成功发送至: {webhook_url[:35]}...")
+                return {"success": True, "message": "✅ 测试消息已成功送达 Discord！请前往频道查收。"}
+            else:
+                bot.log("ERROR", f"Discord Webhook 测试发送失败: {msg}")
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "detail": f"Discord 发送失败: {msg}"}
+                )
+        except Exception as e:
+            bot.log("ERROR", f"测试通知发生内部异常: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "detail": f"内部异常: {str(e)}"}
+            )
 
     @app.get("/api/logs")
     async def get_logs():

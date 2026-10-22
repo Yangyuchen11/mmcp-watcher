@@ -730,12 +730,23 @@ body {
 }
 
 /* Sidebar Settings Card */
+.sidebar-column {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
 .settings-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 14px;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .card-header {
@@ -753,18 +764,24 @@ body {
 }
 
 .settings-body {
-  padding: 20px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   max-height: calc(100vh - 200px);
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .section-group {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .section-header-flex {
@@ -785,12 +802,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .form-group label {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .form-group input,
@@ -799,23 +822,34 @@ body {
   background: var(--bg-input);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 0.84rem;
+  padding: 7px 10px;
+  font-size: 0.82rem;
   color: #fff;
   outline: none;
   font-family: inherit;
   transition: border-color 0.2s;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 52px;
 }
 
 .form-group input:focus,
-.form-group textarea:focus {
+.form-group textarea:focus,
+.form-group select:focus {
   border-color: var(--border-focus);
 }
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* Notification Channels */
@@ -827,6 +861,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .channel-header {
@@ -849,16 +886,22 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .channel-inputs input {
   background: var(--bg-input);
   border: 1px solid #232c3f;
   border-radius: 5px;
-  padding: 6px 8px;
+  padding: 7px 10px;
   font-size: 0.78rem;
   color: #fff;
   outline: none;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .channel-inputs input:focus {
   border-color: var(--border-focus);
