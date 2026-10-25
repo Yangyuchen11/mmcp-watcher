@@ -6,17 +6,18 @@
     "rush_interval_seconds": 0.8,
     "priority_interval_seconds": 0.5,
     "rush_mode": false,
-    "target_keywords": [
-      "ロングメイド",
-      "ひなちゃん",
-      "ひよちゃん",
-      "ちぃち",
-      "なぁな"
-    ],
+    "target_keywords": [],
     "exclude_keywords": [],
     "min_price": 0,
     "max_price": 0,
-    "scan_pages": 2
+    "scan_pages": 2,
+    "priority_rush_interval_seconds": 0.3,
+    "priority_timeout_seconds": 4.0,
+    "priority_hedge_enabled": true,
+    "priority_hedge_delay": 1.5,
+    "priority_hedge_timeout_seconds": 2.0,
+    "empty_catalog_threshold": 2,
+    "enable_empty_catalog_detection": true
   },
   "order": {
     "auto_buy": true,

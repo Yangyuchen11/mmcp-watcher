@@ -52,31 +52,20 @@ class ShopItem:
             return None
 
 MAINTENANCE_KEYWORDS = [
-    "メンテナンス",
     "只今メンテナンス中",
-    "ただいまメンテナンス",
+    "ただいまメンテナンス中",
     "メンテナンスを行っております",
     "只今、メンテナンス中です",
+    "現在メンテナンス中",
     "ショップ準備中",
     "開店準備中",
-    "準備中",
-    "改装中",
-    "休止中",
-    "一時休止",
-    "一時閉店",
-    "閉店中",
-    "休業中",
-    "販売準備",
-    "商品入れ替え",
-    "しばらくお待ち",
-    "カートを閉",
-    "閉鎖中",
-    "再開まで",
-    "closed",
-    "close",
-    "maintenance",
-    "under maintenance",
-    "coming soon"
+    "只今、準備中です",
+    "一時閉店中",
+    "只今閉店中",
+    "只今休止中",
+    "改装中につき",
+    "カートを閉鎖",
+    "店舗改装中"
 ]
 
 UPCOMING_KEYWORDS = [
@@ -115,6 +104,7 @@ class FC2Monitor:
         self.client = client
         self.known_items: Dict[str, ShopItem] = {}
         self.is_initialized = False
+        self.empty_catalog_consecutive = 0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self.client is None or self.client.is_closed:
@@ -149,80 +139,143 @@ class FC2Monitor:
         url: str,
         timeout: float = 4.0,
         hedge_delay: float = 1.5,
+        hedge_timeout: float = 2.0,
         enable_hedge: bool = True
     ) -> Tuple[Optional[str], int]:
         """
-        Hedged Request for Page Fetching (Jeffrey Dean - Tail at Scale):
-        Sends an initial GET request. If no response arrives within hedge_delay, fires a concurrent
-        hedge probe to bypass slow TCP/FastCGI worker queues! Whichever finishes first with HTTP 200 wins.
+        Decoupled Hedged Request for High-Contention FastCGI Queues:
+        - Probe 1 (Main Probe) runs with primary `timeout` (e.g. 4.0s-6.0s), holding its place in queue.
+        - If no response arrives within `hedge_delay` (e.g. 1.5s), Probe 2 (Hedge Probe) is spawned with its own `hedge_timeout` (e.g. 2.0s).
+        - If Probe 2 stalls, only Probe 2 is cut and refreshed with a new connection, WHILE Probe 1 CONTINUES WAITING.
+        - Whichever probe finishes first with HTTP 200 wins and cancels the other!
         """
         if not enable_hedge or hedge_delay <= 0 or hedge_delay >= timeout:
             return await self.fetch_page(url, timeout=timeout)
 
-        t1 = asyncio.create_task(self.fetch_page(url, timeout=timeout))
+        # 1. Start primary probe
+        p1_task = asyncio.create_task(self.fetch_page(url, timeout=timeout))
+
+        # Wait initial hedge_delay
         try:
-            done, _ = await asyncio.wait([t1], timeout=hedge_delay)
-            if t1 in done:
-                res = t1.result()
+            done, _ = await asyncio.wait([p1_task], timeout=hedge_delay)
+            if p1_task in done:
+                res = p1_task.result()
                 if res and res[1] == 200:
                     return res
         except Exception:
             pass
 
-        # Hedge probe: start second concurrent request for the same URL
-        t2 = asyncio.create_task(self.fetch_page(url, timeout=timeout))
-
-        # Race t1 and t2
-        done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-        for completed_task in done:
+        # If primary probe completed early
+        if p1_task.done():
             try:
-                res = completed_task.result()
+                res = p1_task.result()
                 if res and res[1] == 200:
-                    for p in pending:
-                        p.cancel()
+                    return res
+            except Exception:
+                pass
+            p1_task = asyncio.create_task(self.fetch_page(url, timeout=max(1.0, timeout - hedge_delay)))
+
+        # 2. Race primary probe against independent looping hedge probes
+        winner_result: Optional[Tuple[Optional[str], int]] = None
+        winner_event = asyncio.Event()
+
+        async def _watch_p1():
+            nonlocal winner_result
+            try:
+                res = await p1_task
+                if res and res[1] == 200 and not winner_event.is_set():
+                    winner_result = res
+                    winner_event.set()
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        async def _run_hedge_probes():
+            nonlocal winner_result
+            h_timeout = max(0.5, hedge_timeout)
+            while not winner_event.is_set():
+                h_task = asyncio.create_task(self.fetch_page(url, timeout=h_timeout))
+                try:
+                    done, _ = await asyncio.wait([h_task], timeout=h_timeout)
+                    if h_task in done:
+                        res = h_task.result()
+                        if res and res[1] == 200 and not winner_event.is_set():
+                            winner_result = res
+                            winner_event.set()
+                            return
+                    else:
+                        # Hedge probe timed out! Cancel stalled probe and retry next hedge probe
+                        h_task.cancel()
+                        try:
+                            await h_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                except (asyncio.CancelledError, Exception):
+                    h_task.cancel()
+                    break
+
+                if not winner_event.is_set():
+                    await asyncio.sleep(0.05)
+
+        p1_watcher = asyncio.create_task(_watch_p1())
+        hedge_runner = asyncio.create_task(_run_hedge_probes())
+
+        total_rem = max(0.5, timeout - hedge_delay)
+        try:
+            await asyncio.wait_for(winner_event.wait(), timeout=total_rem)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        finally:
+            p1_watcher.cancel()
+            hedge_runner.cancel()
+            if not p1_task.done():
+                p1_task.cancel()
+
+        if winner_result and winner_result[1] == 200:
+            return winner_result
+
+        if p1_task.done():
+            try:
+                res = p1_task.result()
+                if res and res[1] == 200:
                     return res
             except Exception:
                 pass
 
-        if pending:
-            rem_timeout = max(0.1, timeout - hedge_delay)
-            done_pending, _ = await asyncio.wait(pending, timeout=rem_timeout)
-            for pt in done_pending:
-                try:
-                    res = pt.result()
-                    if res and res[1] == 200:
-                        return res
-                except Exception:
-                    pass
-
-        try:
-            return t1.result()
-        except Exception:
-            return None, 0
+        return None, 0
 
     def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
         """
-        Multi-layered bulletproof detection of FC2 Cart maintenance / storefront closure:
-        1. HTTP status code check (502, 503, 504, 423)
-        2. Broad keyword bank matching across full HTML text and title
-        3. Structural anomaly detection: on a store catalog page (?sort=5), if the normal
-           product container (.item_list, #itemlist_page, .item, etc.) is completely absent,
-           the storefront is closed for maintenance/restocking regardless of custom wording.
+        Precise detection of FC2 Cart maintenance / storefront closure:
+        - Differentiates between transient 502/503 server congestion vs genuine store closure!
+        - Transient 502/503/504 errors mean the server is busy, NOT under intentional maintenance.
+        - True store maintenance replaces the storefront with an explicit maintenance page.
         """
-        if status_code in (502, 503, 504, 423):
-            return True
+        # Transient network/gateway errors: server busy, not store maintenance!
+        if status_code in (0, 408, 429, 500, 502, 503, 504, 520, 521, 522, 524):
+            return False
+
         if not html or len(html.strip()) < 50:
             return False
 
         html_lower = html.lower()
 
-        # 1. Check explicit maintenance & closure keywords
+        # Check explicit store-closure keywords in HTML
         for kw in MAINTENANCE_KEYWORDS:
             if kw.lower() in html_lower:
                 return True
 
-        # 2. Structural check: does the catalog page contain standard FC2 product containers?
-        has_items_container = (
+        # Check dedicated maintenance DOM container
+        if "#maintenance" in html_lower or "class=\"maintenance" in html_lower or "class='maintenance" in html_lower:
+            return True
+
+        return False
+
+    def has_items_container(self, html: Optional[str]) -> bool:
+        """Checks if standard FC2 catalog product list containers exist in the rendered HTML"""
+        if not html:
+            return False
+        html_lower = html.lower()
+        return (
             "#itemlist_page" in html_lower or
             "class=\"item_list\"" in html_lower or
             "class='item_list'" in html_lower or
@@ -233,13 +286,6 @@ class FC2Monitor:
             "dl class=\"item\"" in html_lower or
             "dl class='item'" in html_lower
         )
-
-        # On Mamachapp catalog (which normally has 230+ products), if the entire product container
-        # is missing from the rendered HTML, the store is 100% in pre-drop maintenance / closed
-        if not has_items_container:
-            return True
-
-        return False
 
     def parse_items_from_html(self, html: str) -> List[ShopItem]:
         soup = BeautifulSoup(html, DEFAULT_PARSER)
@@ -410,6 +456,7 @@ class FC2Monitor:
         item_url: str,
         timeout: Optional[float] = None,
         hedge_delay: Optional[float] = None,
+        hedge_timeout: Optional[float] = None,
         enable_hedge: bool = False
     ) -> Optional[ShopItem]:
         """Fetches and checks a single product detail page directly, with optional hedged requests"""
@@ -418,6 +465,7 @@ class FC2Monitor:
                 item_url,
                 timeout=timeout or 4.0,
                 hedge_delay=hedge_delay,
+                hedge_timeout=hedge_timeout or 2.0,
                 enable_hedge=True
             )
         else:
@@ -427,34 +475,49 @@ class FC2Monitor:
             return None
         return self.parse_single_item_page(html, item_url)
 
-    async def scan_full_catalog(self, max_pages: int = 15) -> List[ShopItem]:
+    async def scan_full_catalog(self, max_pages: int = 25) -> List[ShopItem]:
         """
         Scans all pages in the store in parallel, ordered by sort=5 (newest update first).
-        Covers the entire product inventory (230+ items).
+        Dynamically detects total page count from page 0 to automatically adapt as items increase.
         """
-        sem = asyncio.Semaphore(3)
-
-        async def _fetch_with_sem(p: int):
-            async with sem:
-                return await self.fetch_page(f"{self.base_url}/?sort=5&page={p}")
-
-        tasks = [_fetch_with_sem(p) for p in range(max_pages)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 1. Fetch page 0 first to discover maximum page count from pagination
+        page0_html, status = await self.fetch_page(f"{self.base_url}/?sort=5&page=0")
+        if not page0_html:
+            return []
 
         all_items: List[ShopItem] = []
         seen_ids = set()
+        for it in self.parse_items_from_html(page0_html):
+            if it.item_id not in seen_ids:
+                seen_ids.add(it.item_id)
+                all_items.append(it)
+                if it.item_id not in self.known_items:
+                    self.known_items[it.item_id] = it
 
-        for res in results:
-            if isinstance(res, tuple) and res[0]:
-                html, _ = res
-                page_items = self.parse_items_from_html(html)
-                for it in page_items:
-                    if it.item_id not in seen_ids:
-                        seen_ids.add(it.item_id)
-                        all_items.append(it)
-                        # Also register in known_items so monitor knows them
-                        if it.item_id not in self.known_items:
-                            self.known_items[it.item_id] = it
+        # Detect total pages from pagination links e.g. /?sort=5&page=11 -> page 11 (12 pages total)
+        page_nums = [int(p) for p in re.findall(r"page=(\d+)", page0_html)]
+        total_pages = min(max_pages, max(page_nums) + 1 if page_nums else 12)
+
+        # 2. Fetch remaining pages (page 1 to total_pages - 1) in parallel
+        if total_pages > 1:
+            sem = asyncio.Semaphore(4)
+
+            async def _fetch_with_sem(p: int):
+                async with sem:
+                    return await self.fetch_page(f"{self.base_url}/?sort=5&page={p}")
+
+            tasks = [_fetch_with_sem(p) for p in range(1, total_pages)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for res in results:
+                if isinstance(res, tuple) and res[0]:
+                    html, _ = res
+                    for it in self.parse_items_from_html(html):
+                        if it.item_id not in seen_ids:
+                            seen_ids.add(it.item_id)
+                            all_items.append(it)
+                            if it.item_id not in self.known_items:
+                                self.known_items[it.item_id] = it
 
         return all_items
 
@@ -565,21 +628,37 @@ class FC2Monitor:
         scan_pages: int = 2,
         min_price: Optional[int] = None,
         max_price: Optional[int] = None,
-        force_instock_trigger: bool = False
-    ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]], bool]:
+        force_instock_trigger: bool = False,
+        enable_empty_catalog_check: bool = True,
+        empty_catalog_threshold: int = 2
+    ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]], bool, str]:
         """
         Performs one monitoring scan.
         Supports multi-page scanning for top pages where drops occur.
-        Returns: (parsed_items, trigger_events, is_maintenance)
+        Returns: (parsed_items, trigger_events, is_maintenance, maintenance_reason)
         """
         # If scan_pages == 1: single request
         if scan_pages <= 1:
             html, status = await self.fetch_page(monitor_url)
             if self.check_maintenance(html, status):
-                return [], [], True
+                self.empty_catalog_consecutive = 0
+                return [], [], True, "官方维护公告标识"
             if not html:
-                return [], [], False
+                return [], [], False, f"网络错误 (HTTP {status})"
             items = self.parse_items_from_html(html)
+
+            # Check consecutive empty catalog anomaly (shop emptied/hidden for restocking)
+            if enable_empty_catalog_check and status == 200 and len(html.strip()) > 300:
+                if len(items) == 0 and not self.has_items_container(html):
+                    self.empty_catalog_consecutive += 1
+                    if self.empty_catalog_consecutive >= empty_catalog_threshold:
+                        return [], [], True, f"商品全量清空 (连续{self.empty_catalog_consecutive}次空页面确认)"
+                    else:
+                        return [], [], False, f"空页面警告 (第{self.empty_catalog_consecutive}/{empty_catalog_threshold}次)"
+                else:
+                    self.empty_catalog_consecutive = 0
+            elif len(items) > 0:
+                self.empty_catalog_consecutive = 0
         else:
             # Parallel scan of top pages (e.g. page 0 and page 1)
             base_query = monitor_url.split("?")[0]
@@ -588,16 +667,35 @@ class FC2Monitor:
 
             items = []
             seen_ids = set()
-            for res in results:
+            first_page_html = ""
+            first_page_status = 0
+            for idx, res in enumerate(results):
                 if isinstance(res, tuple):
                     html, status = res
+                    if idx == 0:
+                        first_page_html = html
+                        first_page_status = status
                     if self.check_maintenance(html, status):
-                        return [], [], True
+                        self.empty_catalog_consecutive = 0
+                        return [], [], True, "官方维护公告标识"
                     if html:
                         for it in self.parse_items_from_html(html):
                             if it.item_id not in seen_ids:
                                 seen_ids.add(it.item_id)
                                 items.append(it)
+
+            # Check consecutive empty catalog anomaly on page 0
+            if enable_empty_catalog_check and first_page_status == 200 and first_page_html and len(first_page_html.strip()) > 300:
+                if len(items) == 0 and not self.has_items_container(first_page_html):
+                    self.empty_catalog_consecutive += 1
+                    if self.empty_catalog_consecutive >= empty_catalog_threshold:
+                        return [], [], True, f"商品全量清空 (连续{self.empty_catalog_consecutive}次空页面确认)"
+                    else:
+                        return [], [], False, f"空页面警告 (第{self.empty_catalog_consecutive}/{empty_catalog_threshold}次)"
+                else:
+                    self.empty_catalog_consecutive = 0
+            elif len(items) > 0:
+                self.empty_catalog_consecutive = 0
 
         triggers = self.check_matches(
             items,
@@ -607,4 +705,4 @@ class FC2Monitor:
             max_price=max_price,
             force_instock_trigger=force_instock_trigger
         )
-        return items, triggers, False
+        return items, triggers, False, ""

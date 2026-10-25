@@ -95,7 +95,8 @@ class FC2Checkout:
 
                 return True, f"加购已发送 ({elapsed_ms}ms)"
             except Exception as e:
-                last_error = f"加购网络异常: {e}"
+                err_desc = str(e) if str(e) else type(e).__name__
+                last_error = f"加购网络异常: {err_desc}"
                 if attempt < self.retry_count:
                     await asyncio.sleep(self.retry_delay)
                     continue
@@ -306,7 +307,8 @@ class FC2Checkout:
 
                 return True, form_ctx, None
             except Exception as e:
-                last_error = f"GET /regi 异常: {e}"
+                err_desc = str(e) if str(e) else type(e).__name__
+                last_error = f"GET /regi 异常: {err_desc}"
                 if attempt < self.retry_count:
                     await asyncio.sleep(self.retry_delay)
                     continue
@@ -398,7 +400,8 @@ class FC2Checkout:
                 prefix = f"[重试第{attempt}次成功] " if attempt > 1 else ""
                 return True, html, f"{prefix}收件信息提交成功 ({elapsed_ms}ms)"
             except Exception as e:
-                last_error = f"POST /regi 网络异常: {e}"
+                err_desc = str(e) if str(e) else type(e).__name__
+                last_error = f"POST /regi 网络异常: {err_desc}"
                 if attempt < self.retry_count:
                     await asyncio.sleep(self.retry_delay)
                     continue

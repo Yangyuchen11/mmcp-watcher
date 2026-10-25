@@ -12,17 +12,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "rush_interval_seconds": 0.8,
         "priority_interval_seconds": 0.5,
         "rush_mode": False,
-        "target_keywords": [
-          "ロングメイド",
-          "ひなちゃん",
-          "ひよちゃん",
-          "ちぃち",
-          "なぁな"
-        ],
+        "target_keywords": [],
         "exclude_keywords": [],
         "min_price": 0,          # Minimum price in JPY (0 means no lower limit)
-        "max_price": 0,          # Maximum price in JPY (0 means no upper limit)
-        "scan_pages": 2
+        "scan_pages": 2,
+        "priority_rush_interval_seconds": 0.3,
+        "priority_timeout_seconds": 4.0,
+        "priority_hedge_enabled": True,
+        "priority_hedge_delay": 1.5,
+        "priority_hedge_timeout_seconds": 2.0,
+        "empty_catalog_threshold": 2,          # 连续无商品页面判定为隐式维护的次数 (0为关闭)
+        "enable_empty_catalog_detection": True # 是否启用连续空页面隐式维护熔断
     },
     "order": {
         "auto_buy": True,

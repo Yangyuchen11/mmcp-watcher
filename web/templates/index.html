@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=2.1">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.0">
   <link rel="icon" type="image/x-icon" href="https://cart.fc2img.com/favicon.ico">
 </head>
 <body>
@@ -66,7 +66,7 @@
 
     <!-- Pre-release Maintenance Alert Banner -->
     <div id="maintenance-alert-banner" class="maintenance-alert-banner" style="display:none;">
-      🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（0.8s），开售后毫秒级抢购！
+      🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（<span id="banner-rush-interval">0.8</span>s），开售后毫秒级抢购！
     </div>
 
     <!-- Active Concurrent Orders Live Banner -->
@@ -138,11 +138,6 @@
             <span>实时货架与商品</span>
             <span class="tab-badge" id="catalog-count">0</span>
           </button>
-          <button class="tab-btn" data-tab="tab-upcoming">
-            <span class="tab-icon">📅</span>
-            <span>预计上线专区</span>
-            <span class="tab-badge upcoming-badge" id="tab-upcoming-count">0</span>
-          </button>
           <button class="tab-btn" data-tab="tab-history">
             <span class="tab-icon">📜</span>
             <span>下单记录</span>
@@ -152,6 +147,10 @@
             <span class="tab-icon">💻</span>
             <span>实时运行终端</span>
           </button>
+          <button class="tab-btn" data-tab="tab-buyer">
+            <span class="tab-icon">👤</span>
+            <span>下单收件信息</span>
+          </button>
         </div>
 
         <!-- Tab 1: Catalog -->
@@ -159,10 +158,10 @@
           <div class="pane-header">
             <div class="pane-title-group">
               <h3>商城全量商品一览 (按新着更新順)</h3>
-              <p>涵盖商城全部 12 页 230+ 件商品，按官方最新修改时间降序排列，支持任意商品下单测试</p>
+              <p>涵盖商城全部分页商品（当前已同步 <span id="catalog-total-indicator">239</span> 款），按官方最新修改时间降序排列，支持任意商品下单测试</p>
             </div>
             <div class="pane-tools">
-              <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="扫描并拉取商城全部 12 页共 230+ 件商品">🔄 刷新全量商品</button>
+              <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="重新扫描并同步商城全部分页的所有在售与预告商品（自动适应总页数）">🔄 刷新全量商品</button>
             </div>
           </div>
 
@@ -228,34 +227,7 @@
           </div>
         </div>
 
-        <!-- Tab 2: Upcoming Drops (预计上线专区) -->
-        <div class="tab-pane" id="tab-upcoming">
-          <div class="pane-header">
-            <div class="pane-title-group">
-              <h3>📅 预计上线商品专区 (開始予定)</h3>
-              <p>官方已公布开始预定日期的商品。系统开启独立高频扫描线程优先盯紧，一旦开售（转为有货）立刻调用并发下单线程发起抢购！</p>
-            </div>
-            <div class="pane-tools">
-              <button id="btn-sync-upcoming" class="btn-xs btn-primary" title="扫描商城全部 12 页并提取所有预计上线商品">🔄 全页面扫描预计上线商品</button>
-            </div>
-          </div>
 
-          <!-- Upcoming Priority Info Banner -->
-          <div class="upcoming-status-banner">
-            <div class="banner-icon">⚡</div>
-            <div class="banner-text">
-              <strong>独立高频优先扫描 + 并发抢购机制运行中：</strong>
-              <span>优先扫描线程正以毫秒级频率监视下方预计上线商品。一旦开售，独立并发下单线程将迅速重复尝试加购结算，绝不阻塞其他扫描任务。</span>
-            </div>
-          </div>
-
-          <div class="catalog-grid" id="upcoming-items-container">
-            <div class="empty-state">
-              <div class="spinner"></div>
-              <p>正在同步预计上线商品...</p>
-            </div>
-          </div>
-        </div>
 
         <!-- Tab 2: Order History -->
         <div class="tab-pane" id="tab-history">
@@ -288,22 +260,20 @@
             <!-- Log entries injected here -->
           </div>
         </div>
-      </div>
 
-      <!-- Right Column: Split Panels -->
-      <aside class="sidebar-column">
-
-        <!-- Panel 1: 下单信息面板 -->
-        <div class="card settings-panel-card" id="panel-buyer-info">
-          <div class="card-header">
-            <div class="card-header-title">
-              <span class="card-icon">👤</span>
-              <h4>下单收件信息 (FC2レジ)</h4>
+        <!-- Tab 5: Buyer Info (下单收件信息) -->
+        <div class="tab-pane" id="tab-buyer">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>👤 下单收件信息配置 (FC2レジ自動入力)</h3>
+              <p>配置抢购结算时的收件人姓名、联系方式、送货地址与代金引換等参数，加购成功后自动填入结算</p>
             </div>
-            <button class="btn-sm btn-primary btn-save-config">保存配置</button>
+            <div class="pane-tools">
+              <button class="btn-sm btn-primary btn-save-config">💾 保存收件配置</button>
+            </div>
           </div>
 
-          <div class="panel-card-body">
+          <div class="buyer-form-layout">
             <div class="form-row">
               <div class="form-group">
                 <label for="cfg-name">姓名 (お名前)</label>
@@ -344,17 +314,21 @@
 
             <div class="form-group">
               <label for="cfg-address">详细住址 (ご住所)</label>
-              <textarea id="cfg-address" rows="2" placeholder="市区町村、番地、建物名・部屋番号"></textarea>
+              <textarea id="cfg-address" rows="3" placeholder="市区町村、番地、建物名・部屋番号"></textarea>
             </div>
 
             <div class="form-group">
               <label for="cfg-biko">备注 (備考，可选)</label>
-              <input type="text" id="cfg-biko" placeholder="可选留言">
+              <input type="text" id="cfg-biko" placeholder="可选留言，如希望的配送时间等">
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- Panel 2: 配置面板 (分为 扫描设置 与 下单设置 两大板块) -->
+      <!-- Right Column: Split Panels -->
+      <aside class="sidebar-column">
+
+        <!-- Panel 1: 配置面板 (分为 扫描设置 与 下单设置 两大板块) -->
         <div class="card settings-panel-card" id="panel-system-config">
           <div class="card-header">
             <div class="card-header-title">
@@ -378,7 +352,7 @@
               <div class="config-block-body">
                 <div class="form-group">
                   <label for="cfg-keywords">目标关键词 (逗号分隔，留空则监控所有新品)</label>
-                  <input type="text" id="cfg-keywords" placeholder="如: ロングメイド, ひなちゃん, ちぃち">
+                  <input type="text" id="cfg-keywords" placeholder="留空则监控所有新品，也可输入: ロングメイド, ひな 等">
                 </div>
 
                 <div class="form-group">
@@ -410,44 +384,56 @@
 
                 <div class="form-group">
                   <label for="cfg-scan-pages" title="每次轮询扫描前N页（每页20件，默认前2页=40件最新修改商品，并发秒级拉取）">轮询扫描深度 (每次扫描前 N 页)</label>
-                  <input type="number" id="cfg-scan-pages" min="1" max="6" value="2">
+                  <input type="number" id="cfg-scan-pages" min="1" value="2">
                 </div>
 
                 <!-- 优先商品直连详情页专属检测设置 (子板块) -->
-                <div class="sub-config-block" style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed rgba(255, 255, 255, 0.1);">
-                  <div class="block-title-row" style="margin-bottom: 8px;">
-                    <span class="config-block-badge" style="background: rgba(147, 51, 234, 0.15); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.3);">🎯 优先检测</span>
-                    <h6 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">优先商品独立详情页检测设置</h6>
+                <div class="sub-config-block">
+                  <div class="sub-block-header">
+                    <div class="block-title-row">
+                      <span class="config-block-badge" style="background: rgba(147, 51, 234, 0.16); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.32);">🎯 优先检测</span>
+                      <h5 class="config-block-title" style="font-size: 0.86rem;">优先商品独立详情页检测设置</h5>
+                    </div>
+                    <p class="config-block-desc">
+                      针对已锁定的预计上线娃娃，各自启动完全独立的协程直连探测详情页，互不阻塞
+                    </p>
                   </div>
-                  <p class="config-block-desc" style="font-size: 0.72rem; margin-bottom: 12px; color: var(--text-secondary);">
-                    针对已锁定的预计上线娃娃，各自启动完全独立的协程直连探测详情页，互不阻塞
-                  </p>
 
-                  <div class="form-row-3">
+                  <div class="form-row">
                     <div class="form-group">
                       <label for="cfg-priority-interval" title="常态下每个优先商品独立详情页的检测间隔（建议 0.3~0.5秒）">优先常态间隔 (秒)</label>
-                      <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" max="5.0" value="0.5">
+                      <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" value="0.5">
                     </div>
                     <div class="form-group">
                       <label for="cfg-priority-rush-interval" title="极速模式下每个优先商品独立详情页的检测间隔（建议 0.2~0.5秒，完全由您自主设定）">优先极速间隔 (秒)</label>
-                      <input type="number" id="cfg-priority-rush-interval" step="0.1" min="0.1" max="5.0" value="0.3">
-                    </div>
-                    <div class="form-group">
-                      <label for="cfg-priority-timeout" title="单品独立详情页单次网络请求超时上限（超出自动切断并重试，防止单品因服务器排队挂死）">单品超时防护 (秒)</label>
-                      <input type="number" id="cfg-priority-timeout" step="0.5" min="1.0" max="15.0" value="4.0">
+                      <input type="number" id="cfg-priority-rush-interval" step="0.05" min="0.05" value="0.3">
                     </div>
                   </div>
 
                   <div class="form-row">
-                    <div class="form-group" style="justify-content: flex-end; padding-bottom: 4px;">
-                      <label class="switch-label" style="font-size: 0.78rem;" title="开启后，若单品详情页探测超过设定秒数未响应，并发启动对冲探测探针双向竞速，最快抓取开售状态！">
-                        <input type="checkbox" id="chk-priority-hedge" checked>
-                        <span>详情页对冲竞速读取</span>
-                      </label>
+                    <div class="form-group">
+                      <label>单品详情页对冲读取</label>
+                      <div class="checkbox-control-box" title="开启后，若单品详情页主探测超过设定秒数未响应，并发启动对冲探测探针双向竞速，最快抓取开售状态！">
+                        <label for="chk-priority-hedge">
+                          <input type="checkbox" id="chk-priority-hedge" checked>
+                          <span>详情页对冲竞速读取</span>
+                        </label>
+                      </div>
                     </div>
                     <div class="form-group">
-                      <label for="cfg-priority-hedge-delay" title="发送详情页探测请求后超过多少秒未响应则启动并发对冲探针（建议 1.0~2.0 秒）">详情页对冲阈值 (秒)</label>
-                      <input type="number" id="cfg-priority-hedge-delay" step="0.2" min="0.5" max="5.0" value="1.5">
+                      <label for="cfg-priority-hedge-delay" title="主探测请求发送后超过多少秒未响应则启动并发对冲探针（此时主探测继续在队列排队等待，建议 1.0~2.0 秒）">详情页对冲阈值 (秒)</label>
+                      <input type="number" id="cfg-priority-hedge-delay" step="0.1" min="0.1" value="1.5">
+                    </div>
+                  </div>
+
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="cfg-priority-timeout" title="基础主探测请求的最长排队超时（在此时间内保持排队不中断，超出后才重置主请求）">主探测超时防护 (秒)</label>
+                      <input type="number" id="cfg-priority-timeout" step="0.5" min="0.5" value="4.0">
+                    </div>
+                    <div class="form-group">
+                      <label for="cfg-priority-hedge-timeout" title="对冲探针自身的独立超时上限（若对冲探针在此秒数内未完成，仅重置并重启对冲探针，完全不影响正在排队的主探测）">对冲进程超时防护 (秒)</label>
+                      <input type="number" id="cfg-priority-hedge-timeout" step="0.5" min="0.5" value="2.0">
                     </div>
                   </div>
                 </div>
@@ -478,41 +464,44 @@
 
                 <div class="form-group">
                   <label for="cfg-max-workers" title="同时允许并发独立下单的商品线程数（每个商品使用独立 Session）">最大并发抢购线程数</label>
-                  <input type="number" id="cfg-max-workers" min="1" max="10" value="3">
+                  <input type="number" id="cfg-max-workers" min="1" value="3">
                 </div>
 
                 <div class="form-row">
                   <div class="form-group">
                     <label for="cfg-session-retries" title="加购成功后，若结算遭遇 502/503 或超时，在保持购物车 Cookie 的前提下就地极速重试的次数">保持购物车重试次数</label>
-                    <input type="number" id="cfg-session-retries" min="1" max="15" value="3">
+                    <input type="number" id="cfg-session-retries" min="1" value="3">
                   </div>
                   <div class="form-group">
                     <label for="cfg-session-retry-delay" title="保持购物车会话内的快速重试间隔时间（秒，建议 0.05~0.2 秒）">保持购物车重试间隔 (秒)</label>
-                    <input type="number" id="cfg-session-retry-delay" step="0.05" min="0.05" max="1.0" value="0.15">
+                    <input type="number" id="cfg-session-retry-delay" step="0.05" min="0.01" value="0.15">
                   </div>
                 </div>
 
                 <div class="form-row">
                   <div class="form-group">
                     <label for="cfg-worker-retries" title="整单抢购若彻底断连或会话失效，重新建立独立新 Session 持续冲击抢购的最大轮数">换会话整单重试轮数</label>
-                    <input type="number" id="cfg-worker-retries" min="1" max="20" value="5">
+                    <input type="number" id="cfg-worker-retries" min="1" value="5">
                   </div>
                   <div class="form-group">
                     <label for="cfg-worker-retry-delay" title="换新会话重试之间的等待间隔（建议 0.1~0.3 秒）">整单重试等待间隔 (秒)</label>
-                    <input type="number" id="cfg-worker-retry-delay" step="0.1" min="0.05" max="2.0" value="0.2">
+                    <input type="number" id="cfg-worker-retry-delay" step="0.05" min="0.01" value="0.2">
                   </div>
                 </div>
 
                 <div class="form-row">
-                  <div class="form-group" style="justify-content: flex-end; padding-bottom: 4px;">
-                    <label class="switch-label" style="font-size: 0.78rem;" title="开启后，若请求在设定秒数内未响应，保持原请求等待的同时，并发启动新的对冲重试线程双向竞速！">
-                      <input type="checkbox" id="chk-hedge-requests" checked>
-                      <span>并发对冲竞速重试</span>
-                    </label>
+                  <div class="form-group">
+                    <label>下单并发对冲重试</label>
+                    <div class="checkbox-control-box" title="开启后，若请求在设定秒数内未响应，保持原请求等待的同时，并发启动新的对冲重试线程双向竞速！">
+                      <label for="chk-hedge-requests">
+                        <input type="checkbox" id="chk-hedge-requests" checked>
+                        <span>并发对冲竞速重试</span>
+                      </label>
+                    </div>
                   </div>
                   <div class="form-group">
                     <label for="cfg-hedge-delay" title="发送请求后超过多少秒未响应则启动并发对冲线程（建议 2.0~3.0 秒）">对冲启动阈值 (秒)</label>
-                    <input type="number" id="cfg-hedge-delay" step="0.5" min="1.0" max="8.0" value="2.5">
+                    <input type="number" id="cfg-hedge-delay" step="0.1" min="0.1" value="2.5">
                   </div>
                 </div>
               </div>
@@ -583,6 +572,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=2.2"></script>
+  <script src="/static/js/app.js?v=3.0"></script>
 </body>
 </html>

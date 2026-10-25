@@ -69,7 +69,8 @@ function initEventHandlers() {
     try {
       const resp = await fetch("/api/toggle-rush", { method: "POST" });
       const data = await resp.json();
-      showToast(data.rush_mode ? "⚡ 极速抢购模式已开启 (0.8s)" : "日常巡检模式已恢复", "warn");
+      const rushVal = document.getElementById("quick-rush-interval") ? document.getElementById("quick-rush-interval").value : "0.8";
+      showToast(data.rush_mode ? `⚡ 极速抢购模式已开启 (${rushVal}s)` : "日常巡检模式已恢复", "warn");
       fetchStatus();
     } catch (e) {
       showToast("切换失败: " + e, "error");
@@ -111,11 +112,13 @@ function initEventHandlers() {
     });
   }
 
-  // Click on Upcoming Metrics Card -> Jump to Upcoming Tab
+  // Click on Upcoming Metrics Card -> Jump to Catalog tab and filter to Upcoming
   const cardUpcoming = document.getElementById("card-metric-upcoming");
   if (cardUpcoming) {
     cardUpcoming.addEventListener("click", () => {
-      switchToTab("tab-upcoming");
+      switchToTab("tab-catalog");
+      const btnUpcomingPill = document.querySelector('.stock-pill[data-stock="upcoming"]');
+      if (btnUpcomingPill) btnUpcomingPill.click();
     });
   }
 
@@ -360,10 +363,14 @@ function renderStatus(data) {
   const dry = data.dry_run;
   const stats = data.stats;
 
+  const curRushVal = document.getElementById("quick-rush-interval") ? document.getElementById("quick-rush-interval").value : "0.8";
+
   // Maintenance banner check
   const banner = document.getElementById("maintenance-alert-banner");
   if (banner) {
     banner.style.display = data.is_in_maintenance ? "flex" : "none";
+    const bannerRushEl = document.getElementById("banner-rush-interval");
+    if (bannerRushEl) bannerRushEl.textContent = curRushVal;
   }
 
   // Active Orders Banner
@@ -395,7 +402,7 @@ function renderStatus(data) {
   const valStatusText = document.getElementById("val-status-text");
   if (data.is_in_maintenance) {
     badgeStatus.className = "badge badge-running";
-    badgeStatus.textContent = "🚨 商城维护中 (0.8s 突击)";
+    badgeStatus.textContent = `🚨 商城维护中 (${curRushVal}s 突击)`;
     valStatusText.textContent = "⚡ 发售前警戒";
   } else if (isRunning) {
     badgeStatus.className = "badge badge-running";
@@ -566,6 +573,8 @@ function updateCatalogView(forceRender = false) {
   if (countInEl) countInEl.textContent = inStockRaw;
   if (countUpcomingEl) countUpcomingEl.textContent = upcomingRaw;
   if (countOutEl) countOutEl.textContent = soldOutRaw;
+  const totalCountIndicator = document.getElementById("catalog-total-indicator");
+  if (totalCountIndicator) totalCountIndicator.textContent = totalRaw;
 
   // 2. Filter items by stock status
   let filtered = catalogItems;
@@ -855,6 +864,7 @@ async function fetchConfig() {
     const priorityTimeout = (shop.priority_timeout_seconds !== undefined) ? shop.priority_timeout_seconds : 4.0;
     const priorityHedgeEnabled = (shop.priority_hedge_enabled !== undefined) ? !!shop.priority_hedge_enabled : true;
     const priorityHedgeDelay = (shop.priority_hedge_delay !== undefined) ? shop.priority_hedge_delay : 1.5;
+    const priorityHedgeTimeout = (shop.priority_hedge_timeout_seconds !== undefined) ? shop.priority_hedge_timeout_seconds : 2.0;
 
     const cfgPriorityRushEl = document.getElementById("cfg-priority-rush-interval");
     if (cfgPriorityRushEl) cfgPriorityRushEl.value = priorityRushInterval;
@@ -864,6 +874,8 @@ async function fetchConfig() {
     if (chkPriorityHedgeEl) chkPriorityHedgeEl.checked = priorityHedgeEnabled;
     const cfgPriorityHedgeDelayEl = document.getElementById("cfg-priority-hedge-delay");
     if (cfgPriorityHedgeDelayEl) cfgPriorityHedgeDelayEl.value = priorityHedgeDelay;
+    const cfgPriorityHedgeTimeoutEl = document.getElementById("cfg-priority-hedge-timeout");
+    if (cfgPriorityHedgeTimeoutEl) cfgPriorityHedgeTimeoutEl.value = priorityHedgeTimeout;
 
     const qInterval = document.getElementById("quick-interval");
     const qRush = document.getElementById("quick-rush-interval");
@@ -871,6 +883,8 @@ async function fetchConfig() {
     if (qInterval) qInterval.value = normalInterval;
     if (qRush) qRush.value = rushInterval;
     if (qPriority) qPriority.value = priorityInterval;
+    const bannerRushEl = document.getElementById("banner-rush-interval");
+    if (bannerRushEl) bannerRushEl.textContent = rushInterval;
 
     const scanPagesEl = document.getElementById("cfg-scan-pages");
     if (scanPagesEl) scanPagesEl.value = shop.scan_pages || 2;
@@ -943,6 +957,8 @@ function initIntervalControls() {
     if (isNaN(num) || num <= 0) return;
     if (quickRush) quickRush.value = num;
     if (cfgRush) cfgRush.value = num;
+    const bannerRushEl = document.getElementById("banner-rush-interval");
+    if (bannerRushEl) bannerRushEl.textContent = num;
     syncAndSave({ rush_interval_seconds: num }, `⚡ 极速突击间隔已设为 ${num} 秒 (即时生效)`, "warn");
   };
 
@@ -988,6 +1004,7 @@ async function saveConfig() {
   const priorityTimeoutEl = document.getElementById("cfg-priority-timeout");
   const chkPriorityHedgeEl = document.getElementById("chk-priority-hedge");
   const priorityHedgeDelayEl = document.getElementById("cfg-priority-hedge-delay");
+  const priorityHedgeTimeoutEl = document.getElementById("cfg-priority-hedge-timeout");
 
   const sessionRetriesEl = document.getElementById("cfg-session-retries");
   const sessionRetryDelayEl = document.getElementById("cfg-session-retry-delay");
@@ -1021,6 +1038,7 @@ async function saveConfig() {
       priority_timeout_seconds: priorityTimeoutEl ? (parseFloat(priorityTimeoutEl.value) || 4.0) : 4.0,
       priority_hedge_enabled: chkPriorityHedgeEl ? chkPriorityHedgeEl.checked : true,
       priority_hedge_delay: priorityHedgeDelayEl ? (parseFloat(priorityHedgeDelayEl.value) || 1.5) : 1.5,
+      priority_hedge_timeout_seconds: priorityHedgeTimeoutEl ? (parseFloat(priorityHedgeTimeoutEl.value) || 2.0) : 2.0,
       scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2
     },
     order: {

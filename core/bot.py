@@ -122,10 +122,10 @@ class BotEngine:
         self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品，新一轮发售可重新抢购")
 
     async def sync_full_catalog(self) -> int:
-        """Background worker that syncs the entire store catalog (230+ items) in sort=5 order"""
+        """Background worker that syncs the entire store catalog in sort=5 order"""
         try:
             self.log("INFO", "📦 正在拉取商城全量货架商品列表（按官方最新修改时间排序）...")
-            items = await self.monitor.scan_full_catalog(max_pages=15)
+            items = await self.monitor.scan_full_catalog(max_pages=25)
             if items:
                 catalog_dicts = []
                 upcoming_dict = {}
@@ -384,6 +384,7 @@ class BotEngine:
             timeout = float(shop_cfg.get("priority_timeout_seconds", 4.0))
             hedge_enabled = bool(shop_cfg.get("priority_hedge_enabled", True))
             hedge_delay = float(shop_cfg.get("priority_hedge_delay", 1.5))
+            hedge_timeout = float(shop_cfg.get("priority_hedge_timeout_seconds", 2.0))
 
             try:
                 # Direct check of this single product's detail page with hedged racing and configurable timeout
@@ -391,6 +392,7 @@ class BotEngine:
                     url,
                     timeout=timeout,
                     hedge_delay=hedge_delay,
+                    hedge_timeout=hedge_timeout,
                     enable_hedge=hedge_enabled
                 )
                 if target_item:
@@ -442,14 +444,19 @@ class BotEngine:
 
             try:
                 t0 = time.perf_counter()
-                items, triggers, is_maintenance = await self.monitor.check_once(
+                enable_empty_check = shop_cfg.get("enable_empty_catalog_detection", True)
+                empty_threshold = shop_cfg.get("empty_catalog_threshold", 2)
+
+                items, triggers, is_maintenance, maint_reason = await self.monitor.check_once(
                     monitor_url=monitor_url,
                     target_keywords=target_keywords,
                     exclude_keywords=exclude_keywords,
                     scan_pages=scan_pages,
                     min_price=min_price,
                     max_price=max_price,
-                    force_instock_trigger=False
+                    force_instock_trigger=False,
+                    enable_empty_catalog_check=enable_empty_check,
+                    empty_catalog_threshold=empty_threshold
                 )
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -462,13 +469,15 @@ class BotEngine:
                 if is_maintenance:
                     if not self.is_in_maintenance:
                         self.is_in_maintenance = True
-                        self.log("WARN", "🚨 【发售前维护侦测】检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询！")
+                        rush_int = self.config.get("shop", {}).get("rush_interval_seconds", 0.8)
+                        reason_tag = f"【原因: {maint_reason}】" if maint_reason else ""
+                        self.log("WARN", f"🚨 【发售前维护侦测】检测到 Mamachapp 商城进入维护中！{reason_tag} 通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询 ({rush_int}s)！")
                         await self.dispatcher.broadcast(
                             title="🚨 【发售前维护预警】Mamachapp 商城进入维护状态！",
-                            content="店铺已进入维护模式，这是发售前补库存的明确信号！\n机器人已自动切换为最高警戒极速抢购模式（0.8s 轮询），一旦维护结束开售立即抢购！",
+                            content=f"店铺已进入维护模式{reason_tag}，这是发售前补库存的明确信号！\n机器人已自动切换为最高警戒极速抢购模式（{rush_int}s 轮询），一旦维护结束开售立即抢购！",
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
-                    self.stats["last_scan_status"] = f"维护中 (Maintenance, {elapsed_ms}ms)"
+                    self.stats["last_scan_status"] = f"维护中 ({maint_reason or 'Maintenance'}, {elapsed_ms}ms)"
                     await self._sleep_interruptible_catalog(interval)
                     continue
                 else:
@@ -488,6 +497,13 @@ class BotEngine:
                             max_price=max_price,
                             force_instock_trigger=True
                         )
+
+                # Fast Double-Check: If 1st strike of empty catalog on normal interval, probe again in 1.0s to confirm
+                if self.monitor.empty_catalog_consecutive > 0 and not rush_mode:
+                    self.log("WARN", f"⚠️ 【空页面异常预警】商城响应正常但未检出任何商品情报 ({self.monitor.empty_catalog_consecutive}/{empty_threshold})，将在 1.0s 后执行快速对冲复检...")
+                    self.stats["last_scan_status"] = f"空页面复检中 ({self.monitor.empty_catalog_consecutive}/{empty_threshold})"
+                    await self._sleep_interruptible_catalog(1.0)
+                    continue
 
                 if items:
                     self.stats["last_scan_status"] = f"OK ({len(items)}件最新商品, {elapsed_ms}ms)"
