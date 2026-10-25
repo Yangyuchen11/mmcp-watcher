@@ -60,6 +60,7 @@ class BotEngine:
 
         # Multi-worker Concurrency & Session Deduplication
         self.purchased_item_ids: set = set()
+        self.simulated_item_ids: set = set()                        # item_ids simulated successfully in dry_run mode
         self.soldout_item_ids: set = set()                          # item_ids confirmed sold out by detail monitor or checkout
         self.active_order_tasks: Dict[str, asyncio.Task] = {}       # item_id -> running Task
         self.active_orders_status: Dict[str, Dict[str, Any]] = {}   # item_id -> live status dict
@@ -462,11 +463,20 @@ class BotEngine:
                             self.trigger_maintenance_direct_orders()
 
                     if target_item.in_stock:
-                        # 🔥 THE MOMENT THIS DOLL BECOMES IN STOCK!
-                        # Dispatch order worker if not already running or succeeded
-                        if item_id not in self.purchased_item_ids and (item_id not in self.active_order_tasks or self.active_order_tasks[item_id].done()):
-                            self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
-                            self.upcoming_items.pop(item_id, None)
+                        # 🔥 THE MOMENT THIS DOLL BECOMES IN STOCK OR CONTINUES IN STOCK!
+                        order_cfg = self.config.get("order", {})
+                        dry_run = bool(order_cfg.get("dry_run", False))
+                        already_done = (item_id in self.purchased_item_ids) or (dry_run and item_id in self.simulated_item_ids)
+                        if not already_done and (item_id not in self.active_order_tasks or self.active_order_tasks[item_id].done()):
+                            is_relay = bool(self.upcoming_items.get(item_id, {}).get("in_stock", False))
+                            if is_relay:
+                                self.log("INFO", f"🔄【在库接力抢购】重点商品 [{target_item.title}] (ID: {item_id}) 依然在库且上一轮已结束，专属协程接力派发全新抢购线程！")
+                            else:
+                                self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
+                            # 更新其在 upcoming_items 中的在库状态，绝不提前移除！确保专属监控协程与预热通道持续全速运转
+                            if item_id in self.upcoming_items:
+                                self.upcoming_items[item_id]["in_stock"] = True
+                                self.upcoming_items[item_id]["stock_text"] = target_item.stock_text
                             self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
                     elif target_item.is_upcoming:
                         self.upcoming_items[item_id] = target_item.to_dict()
@@ -477,6 +487,8 @@ class BotEngine:
                         if is_soldout_detail:
                             self.soldout_item_ids.add(item_id)
                             self.upcoming_items.pop(item_id, None)
+                            self.stats["upcoming_count"] = len(self.upcoming_items)
+                            asyncio.create_task(self._close_prewarmed_sessions(item_id))
                             self.log("WARN", f"❌ [专属详情监控] 商品 [{target_item.title}] (ID: {item_id}) 详情页已确认为售罄 ({target_item.stock_text})！")
                             self.cancel_order_worker(item_id, reason="详情页已售罄")
                             break
@@ -624,11 +636,14 @@ class BotEngine:
                 # If an item on the shelf matches rules and is in_stock, but its previous order worker
                 # finished all worker retries without successfully buying, re-dispatch a fresh worker!
                 if items and self.config.get("order", {}).get("auto_buy", True):
-                    max_orders = self.config.get("order", {}).get("max_orders", 1)
+                    order_cfg = self.config.get("order", {})
+                    dry_run = bool(order_cfg.get("dry_run", False))
+                    max_orders = order_cfg.get("max_orders", 1)
                     quota_ok = (max_orders <= 0) or (len(self.purchased_item_ids) < max_orders)
                     if quota_ok:
                         for it in items:
-                            if it.in_stock and it.item_id not in self.purchased_item_ids and it.item_id not in self.soldout_item_ids:
+                            already_done = (it.item_id in self.purchased_item_ids) or (dry_run and it.item_id in self.simulated_item_ids)
+                            if it.in_stock and not already_done and it.item_id not in self.soldout_item_ids:
                                 if it.item_id not in self.active_order_tasks or self.active_order_tasks[it.item_id].done():
                                     if self.monitor.matches_rules(it, target_keywords, exclude_keywords, min_price, max_price):
                                         self.log("INFO", f"🔄 货架商品 [{it.title}] (ID: {it.item_id}) 依然有货且尚未购得，重新派发全新独立抢购线程接力！")
@@ -772,6 +787,18 @@ class BotEngine:
                 return checkout
         return None
 
+    async def _close_prewarmed_sessions(self, item_id: str):
+        """Immediately closes and removes prewarmed TCP/TLS sessions for this item"""
+        item_id = str(item_id)
+        sessions = self.prewarmed_checkouts.pop(item_id, {})
+        for s in sessions.values():
+            if s and not s.client.is_closed:
+                try:
+                    await s.close()
+                except Exception:
+                    pass
+        self.stats["prewarmed_count"] = sum(len(v) for v in self.prewarmed_checkouts.values())
+
     async def _prewarm_sessions_loop(self):
         """
         Background maintenance loop that maintains pre-warmed TCP+TLS connections
@@ -882,6 +909,10 @@ class BotEngine:
         # 1. Deduplication: already successfully purchased?
         if item_id in self.purchased_item_ids:
             self.log("INFO", f"⏩ 商品 [{item.title}] (ID: {item_id}) 此前已成功下单，自动跳过以防同款重复购买")
+            return
+
+        dry_run = bool(order_cfg.get("dry_run", False))
+        if dry_run and item_id in self.simulated_item_ids:
             return
 
         # 2. Concurrency: already has an active order worker running for this item?
@@ -1085,15 +1116,24 @@ class BotEngine:
 
                     # Check order outcome
                     if res.get("success"):
-                        self.purchased_item_ids.add(item_id)
-                        self.upcoming_items.pop(item_id, None)
-                        self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
+                        is_dry_run = res.get("dry_run", False)
+                        if not is_dry_run:
+                            # ⚠️ 仅实盘真实抢购成功出单时，才正式标记为已购、从待抢列表中移除并释放长连接！
+                            self.purchased_item_ids.add(item_id)
+                            self.upcoming_items.pop(item_id, None)
+                            self.stats["upcoming_count"] = len(self.upcoming_items)
+                            asyncio.create_task(self._close_prewarmed_sessions(item_id))
+                            self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
+                        else:
+                            # 🛡️ 模拟模式下仅记录模拟出单与流程日志，绝不把商品从监控列表中误剔除，保持长连接热就绪！
+                            self.simulated_item_ids.add(item_id)
+                            self.log("INFO", f"🛡️ [模拟测试完成] 商品 [{item.title}] (ID: {item_id}) 模拟结算链路跑通，保持预计监控与长连接预热就绪")
 
                         self.order_history.insert(0, res)
                         if len(self.order_history) > 50:
                             self.order_history.pop()
 
-                        order_title = f"{'🛡️ [模拟]' if res.get('dry_run') else '🎉 [实盘]'} 抢购成功！"
+                        order_title = f"{'🛡️ [模拟]' if is_dry_run else '🎉 [实盘]'} 抢购成功！"
                         order_content = f"商品: {item.title}\n结果: {res.get('message')}\n耗时: {res.get('elapsed_seconds')}s\n"
                         if res.get("order_id"):
                             order_content += f"订单号: {res.get('order_id')}\n"
@@ -1104,13 +1144,13 @@ class BotEngine:
                         await self.dispatcher.broadcast(order_title, order_content, url=item.url)
 
                         max_orders = order_cfg.get("max_orders", 1)
-                        if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+                        if not is_dry_run and max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
                             self.log("SUCCESS", f"🎉 已成功抢齐全部预期款式 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止其余下单线程与监控！")
                             for other_id, other_task in list(self.active_order_tasks.items()):
                                 if other_id != item_id and not other_task.done():
                                     other_task.cancel()
                             await self.stop()
-                        else:
+                        elif not is_dry_run:
                             remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
                             self.log("INFO", f"已成功抢下 1 款商品 (ID: {item_id})，当前已获 {len(self.purchased_item_ids)} 款，继续监控其余款式 ({remaining})")
                         return
@@ -1126,6 +1166,8 @@ class BotEngine:
                     if is_soldout:
                         self.soldout_item_ids.add(item_id)
                         self.upcoming_items.pop(item_id, None)
+                        self.stats["upcoming_count"] = len(self.upcoming_items)
+                        asyncio.create_task(self._close_prewarmed_sessions(item_id))
                         self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 已确认售罄 (在庫切れ)，并发下单线程停止抢购")
                         self.order_history.insert(0, res)
                         return
