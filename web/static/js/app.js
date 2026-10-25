@@ -3,11 +3,15 @@ let currentStatus = null;
 let currentConfig = null;
 let sseConnection = null;
 let catalogItems = [];
+let upcomingItems = [];
+let activeOrders = [];
+let priorityItemIds = new Set();
 let catalogFilterQuery = "";
-let catalogStockFilter = "all"; // 'all' | 'instock' | 'soldout'
+let catalogStockFilter = "all"; // 'all' | 'instock' | 'upcoming' | 'soldout'
 let catalogCurrentPage = 1;
 let catalogPageSize = 100;
 let lastCatalogSignature = "";
+let lastUpcomingSignature = "";
 
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
@@ -26,15 +30,21 @@ function initTabs() {
   const tabs = document.querySelectorAll(".tab-btn");
   tabs.forEach(btn => {
     btn.addEventListener("click", () => {
-      tabs.forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
-
-      btn.classList.add("active");
       const targetId = btn.getAttribute("data-tab");
-      const targetPane = document.getElementById(targetId);
-      if (targetPane) targetPane.classList.add("active");
+      switchToTab(targetId);
     });
   });
+}
+
+function switchToTab(targetId) {
+  const tabs = document.querySelectorAll(".tab-btn");
+  tabs.forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+
+  const targetBtn = document.querySelector(`.tab-btn[data-tab="${targetId}"]`);
+  const targetPane = document.getElementById(targetId);
+  if (targetBtn) targetBtn.classList.add("active");
+  if (targetPane) targetPane.classList.add("active");
 }
 
 // Event Handlers for Header and Actions
@@ -47,7 +57,7 @@ function initEventHandlers() {
     try {
       const resp = await fetch(endpoint, { method: "POST" });
       const data = await resp.json();
-      showToast(data.is_running ? "监控已启动" : "监控已暂停", "info");
+      showToast(data.is_running ? "监控已启动！双线程扫描与并发抢购已就绪" : "监控已暂停", "info");
       fetchStatus();
     } catch (e) {
       showToast("操作失败: " + e, "error");
@@ -78,8 +88,14 @@ function initEventHandlers() {
     }
   });
 
-  // Save Config
-  document.getElementById("btn-save-config").addEventListener("click", saveConfig);
+  // Save Config (attached to all save buttons in all panels)
+  document.querySelectorAll(".btn-save-config").forEach(btn => {
+    btn.addEventListener("click", saveConfig);
+  });
+  const singleSaveBtn = document.getElementById("btn-save-config");
+  if (singleSaveBtn) {
+    singleSaveBtn.addEventListener("click", saveConfig);
+  }
 
   // Reset Session
   const btnReset = document.getElementById("btn-reset-session");
@@ -92,6 +108,14 @@ function initEventHandlers() {
       } catch (e) {
         showToast("重置失败: " + e, "error");
       }
+    });
+  }
+
+  // Click on Upcoming Metrics Card -> Jump to Upcoming Tab
+  const cardUpcoming = document.getElementById("card-metric-upcoming");
+  if (cardUpcoming) {
+    cardUpcoming.addEventListener("click", () => {
+      switchToTab("tab-upcoming");
     });
   }
 
@@ -131,18 +155,41 @@ function initEventHandlers() {
   const btnSync = document.getElementById("btn-sync-catalog");
   if (btnSync) {
     btnSync.addEventListener("click", async () => {
-      showToast("正在同步商城全量商品（约 1~2 秒）...", "info");
+      showToast("正在拉取全量货架商品（约 1~2 秒）...", "info");
       btnSync.disabled = true;
       try {
         const resp = await fetch("/api/sync-catalog", { method: "POST" });
         const data = await resp.json();
-        showToast(`全量商品同步完成！共 ${data.count} 件，已按官方最新修改时间排序`, "success");
+        showToast(`全量商品同步完成！共 ${data.count} 件（已识别 ${data.upcoming_count || 0} 款预计上线商品）`, "success");
         lastCatalogSignature = "";
+        lastUpcomingSignature = "";
         fetchStatus();
       } catch (e) {
         showToast("同步失败: " + e.message, "error");
       } finally {
         btnSync.disabled = false;
+      }
+    });
+  }
+
+  // Scan Upcoming Items Specifically
+  const btnSyncUpcoming = document.getElementById("btn-sync-upcoming");
+  if (btnSyncUpcoming) {
+    btnSyncUpcoming.addEventListener("click", async () => {
+      showToast("正在扫描全量页面提取所有【開始予定】商品...", "info");
+      btnSyncUpcoming.disabled = true;
+      try {
+        const resp = await fetch("/api/upcoming/scan", { method: "POST" });
+        const data = await resp.json();
+        showToast(`扫描完成！共提取到 ${data.count} 款预计上线商品，已纳入优先高频扫描序列`, "success");
+        upcomingItems = data.items || [];
+        lastUpcomingSignature = "";
+        renderUpcomingView(upcomingItems);
+        fetchStatus();
+      } catch (e) {
+        showToast("扫描预计上线商品失败: " + e.message, "error");
+      } finally {
+        btnSyncUpcoming.disabled = false;
       }
     });
   }
@@ -199,7 +246,7 @@ function initEventHandlers() {
     });
   }
 
-  // Pagination Controls Event Delegation (both top and bottom pagination bars)
+  // Pagination Controls Event Delegation
   document.querySelectorAll(".pagination-bar").forEach(bar => {
     bar.addEventListener("click", (e) => {
       const pageBtn = e.target.closest("[data-page]");
@@ -247,6 +294,52 @@ function initEventHandlers() {
   });
 }
 
+// Toggle Priority Monitoring for an Item
+window.togglePriority = async function(itemId) {
+  try {
+    const resp = await fetch("/api/upcoming/priority", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      if (data.is_priority) {
+        priorityItemIds.add(itemId);
+        showToast(`⭐ 商品 ID ${itemId} 已设为【最高优先级监控】！`, "success");
+      } else {
+        priorityItemIds.delete(itemId);
+        showToast(`商品 ID ${itemId} 已恢复为常态监控`, "info");
+      }
+      updateCatalogView(true);
+      renderUpcomingView(upcomingItems);
+      fetchStatus();
+    }
+  } catch (e) {
+    showToast("操作失败: " + e.message, "error");
+  }
+};
+
+// Cancel an Active Concurrent Order Worker
+window.cancelActiveOrder = async function(itemId) {
+  try {
+    const resp = await fetch("/api/orders/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      showToast(`🛑 已终止商品 ID ${itemId} 的并发抢购线程`, "warn");
+      fetchStatus();
+    } else {
+      showToast(`该线程已结束或无法终止`, "info");
+    }
+  } catch (e) {
+    showToast("取消失败: " + e.message, "error");
+  }
+};
+
 // Fetch Status
 async function fetchStatus() {
   try {
@@ -270,12 +363,12 @@ function renderStatus(data) {
   // Maintenance banner check
   const banner = document.getElementById("maintenance-alert-banner");
   if (banner) {
-    if (data.is_in_maintenance) {
-      banner.style.display = "flex";
-    } else {
-      banner.style.display = "none";
-    }
+    banner.style.display = data.is_in_maintenance ? "flex" : "none";
   }
+
+  // Active Orders Banner
+  activeOrders = data.active_orders || [];
+  renderActiveOrdersBanner(activeOrders);
 
   // Header Start/Stop Button
   const btnRun = document.getElementById("btn-toggle-run");
@@ -317,8 +410,34 @@ function renderStatus(data) {
   document.getElementById("val-last-scan").textContent = `最后扫描: ${stats.last_scan_time || "--:--:--"}`;
   document.getElementById("val-total-scans").textContent = stats.total_scans.toLocaleString();
   document.getElementById("val-scan-speed").textContent = `状态: ${stats.last_scan_status || "OK"}`;
-  document.getElementById("val-total-matches").textContent = stats.total_matches;
   document.getElementById("val-orders-count").textContent = `${stats.total_orders_succeeded} / ${stats.total_orders_attempted}`;
+
+  // Upcoming items count metric
+  upcomingItems = data.upcoming_items || [];
+  priorityItemIds = new Set(data.priority_item_ids || []);
+  const upcomingCount = data.upcoming_count !== undefined ? data.upcoming_count : upcomingItems.length;
+  
+  const valUpcoming = document.getElementById("val-upcoming-count");
+  if (valUpcoming) valUpcoming.textContent = `${upcomingCount} 款`;
+  const badgeUpcoming = document.getElementById("badge-upcoming-metric");
+  if (badgeUpcoming) badgeUpcoming.textContent = `${upcomingCount} 款`;
+  const tabUpcomingBadge = document.getElementById("tab-upcoming-count");
+  if (tabUpcomingBadge) tabUpcomingBadge.textContent = upcomingCount;
+
+  // Active workers count metric
+  const maxWorkers = data.config?.order?.max_concurrent_workers || 3;
+  const valWorkers = document.getElementById("val-active-workers");
+  if (valWorkers) valWorkers.textContent = `${activeOrders.length} / ${maxWorkers}`;
+  const badgeThreads = document.getElementById("badge-threads");
+  if (badgeThreads) {
+    if (activeOrders.length > 0) {
+      badgeThreads.className = "badge badge-running";
+      badgeThreads.textContent = `抢购中 (${activeOrders.length})`;
+    } else {
+      badgeThreads.className = "badge badge-neutral";
+      badgeThreads.textContent = "待命中";
+    }
+  }
 
   // Catalog
   if (data.recent_items && data.recent_items.length > 0) {
@@ -328,6 +447,9 @@ function renderStatus(data) {
     updateCatalogView(false);
   }
 
+  // Render Upcoming View
+  renderUpcomingView(upcomingItems);
+
   // History
   if (data.order_history) {
     document.getElementById("history-count").textContent = data.order_history.length;
@@ -335,10 +457,87 @@ function renderStatus(data) {
   }
 }
 
+// Render Active Orders Banner (Real-time live multi-threading progress)
+function renderActiveOrdersBanner(orders) {
+  const banner = document.getElementById("active-orders-banner");
+  const list = document.getElementById("active-orders-list");
+  if (!banner || !list) return;
+
+  if (!orders || orders.length === 0) {
+    banner.style.display = "none";
+    return;
+  }
+
+  banner.style.display = "flex";
+  list.innerHTML = orders.map(o => `
+    <div class="order-chip">
+      <span class="chip-dot"></span>
+      <span class="chip-title" title="${escapeHtml(o.title)}">[ID: ${o.item_id}] ${escapeHtml(o.title)}</span>
+      <span class="chip-status">${escapeHtml(o.status)}</span>
+      <button class="chip-cancel" onclick="cancelActiveOrder('${o.item_id}')" title="取消抢购线程">✕</button>
+    </div>
+  `).join("");
+}
+
+// Render Upcoming Drops Dedicated View
+function renderUpcomingView(items) {
+  const container = document.getElementById("upcoming-items-container");
+  if (!container) return;
+
+  const currentSig = items.map(i => `${i.item_id}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
+  if (currentSig === lastUpcomingSignature) return;
+  lastUpcomingSignature = currentSig;
+
+  if (!items || items.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" style="grid-column: 1 / -1; padding: 40px 20px;">
+        <p style="font-size: 1rem; color: #94a3b8;">📅 暂未检测到「開始予定」商品</p>
+        <p style="font-size: 0.82rem; color: #64748b; margin-top: 6px;">当官方在商品后台更新为预计上线状态时将自动显示于此处并开启优先高频扫描。</p>
+        <button type="button" class="btn-xs btn-primary" style="margin-top: 14px; padding: 6px 16px;" onclick="document.getElementById('btn-sync-upcoming')?.click()">🔄 立即扫描全量货架</button>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = items.map(item => {
+    const isPriority = priorityItemIds.has(item.item_id);
+    const timeLabel = item.scheduled_time || item.stock_text || "開始予定";
+    const imgHtml = item.image_url 
+      ? `<img src="${item.image_url}" alt="${escapeHtml(item.title)}" class="item-thumb" onerror="this.src='https://cart.fc2img.com/favicon.ico'">`
+      : `<div class="item-thumb" style="display:flex;align-items:center;justify-content:center;color:#666;">🧸</div>`;
+
+    return `
+      <div class="catalog-card upcoming-card">
+        <div class="card-top">
+          ${imgHtml}
+          <div class="item-info">
+            <a href="${item.url}" target="_blank" class="item-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</a>
+            <div class="item-meta">
+              <span class="item-price">${item.price}</span>
+              <span class="stock-tag stock-upcoming">📅 ${escapeHtml(timeLabel)}</span>
+            </div>
+            <div style="font-size: 0.74rem; color: #a78bfa; margin-top: 2px;">
+              ⚡ 优先扫描线程毫秒级待命中
+            </div>
+          </div>
+        </div>
+        <div class="card-actions">
+          <span class="badge-priority-auto">⚡ 独立优先扫描中</span>
+          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+            <span class="item-id-tag">ID: ${item.item_id}</span>
+            <button class="btn-test-item" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
+              🧪 测试加购
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
 // Catalog Fingerprint to avoid unnecessary DOM re-renders during 2s polling
 function getCatalogSignature(items) {
   if (!items || items.length === 0) return "";
-  return items.length + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : 0}`).join(",");
+  return items.length + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : (i.is_upcoming ? 2 : 0)}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
 }
 
 // Update Catalog View with Active Filters & Pagination
@@ -348,28 +547,34 @@ function updateCatalogView(forceRender = false) {
 
   const currentSig = getCatalogSignature(catalogItems) + `_${catalogFilterQuery}_${catalogStockFilter}_${catalogCurrentPage}_${catalogPageSize}`;
   if (!forceRender && currentSig === lastCatalogSignature) {
-    return; // Data and filter/page state have not changed, keep current DOM intact
+    return;
   }
   lastCatalogSignature = currentSig;
 
   // 1. Update filter pill counts for all items
   const totalRaw = catalogItems.length;
   const inStockRaw = catalogItems.filter(i => !!i.in_stock).length;
-  const soldOutRaw = totalRaw - inStockRaw;
+  const upcomingRaw = catalogItems.filter(i => !!i.is_upcoming).length;
+  const soldOutRaw = catalogItems.filter(i => !i.in_stock && !i.is_upcoming).length;
 
   const countAllEl = document.getElementById("count-all");
   const countInEl = document.getElementById("count-instock");
+  const countUpcomingEl = document.getElementById("count-upcoming");
   const countOutEl = document.getElementById("count-soldout");
+
   if (countAllEl) countAllEl.textContent = totalRaw;
   if (countInEl) countInEl.textContent = inStockRaw;
+  if (countUpcomingEl) countUpcomingEl.textContent = upcomingRaw;
   if (countOutEl) countOutEl.textContent = soldOutRaw;
 
   // 2. Filter items by stock status
   let filtered = catalogItems;
   if (catalogStockFilter === "instock") {
     filtered = filtered.filter(i => !!i.in_stock);
+  } else if (catalogStockFilter === "upcoming") {
+    filtered = filtered.filter(i => !!i.is_upcoming);
   } else if (catalogStockFilter === "soldout") {
-    filtered = filtered.filter(i => !i.in_stock);
+    filtered = filtered.filter(i => !i.in_stock && !i.is_upcoming);
   }
 
   // 3. Filter items by search query (title or item_id)
@@ -415,37 +620,58 @@ function updateCatalogView(forceRender = false) {
     }
   } else {
     container.innerHTML = pageItems.map(item => {
-      const isSoldOut = !item.in_stock;
-      const stockClass = isSoldOut ? "stock-soldout" : "stock-instock";
-      const stockText = isSoldOut ? "在庫切れ (售罄)" : "在庫あり (有库存)";
+      const isUpcoming = !!item.is_upcoming;
+      const isSoldOut = !item.in_stock && !item.is_upcoming;
+      const isPriority = priorityItemIds.has(item.item_id);
+
+      let cardClass = "catalog-card";
+      let stockClass = "stock-soldout";
+      let stockText = "在庫切れ (售罄)";
+
+      if (isUpcoming) {
+        cardClass = "catalog-card upcoming-card";
+        stockClass = "stock-upcoming";
+        stockText = `📅 ${item.scheduled_time || item.stock_text || "開始予定"}`;
+      } else if (item.in_stock) {
+        stockClass = "stock-instock";
+        stockText = "在庫あり (有库存)";
+      }
+
       const imgHtml = item.image_url 
-        ? `<img src="${item.image_url}" alt="${item.title}" class="item-thumb" onerror="this.src='https://cart.fc2img.com/favicon.ico'">`
+        ? `<img src="${item.image_url}" alt="${escapeHtml(item.title)}" class="item-thumb" onerror="this.src='https://cart.fc2img.com/favicon.ico'">`
         : `<div class="item-thumb" style="display:flex;align-items:center;justify-content:center;color:#666;">🧸</div>`;
 
+      const priorityBtn = isUpcoming 
+        ? `<span class="badge-priority-auto">⚡ 优先待命</span>`
+        : "";
+
       return `
-        <div class="catalog-card">
+        <div class="${cardClass}">
           <div class="card-top">
             ${imgHtml}
             <div class="item-info">
-              <a href="${item.url}" target="_blank" class="item-title" title="${item.title}">${item.title}</a>
+              <a href="${item.url}" target="_blank" class="item-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</a>
               <div class="item-meta">
                 <span class="item-price">${item.price}</span>
-                <span class="stock-tag ${stockClass}">${stockText}</span>
+                <span class="stock-tag ${stockClass}">${escapeHtml(stockText)}</span>
               </div>
             </div>
           </div>
           <div class="card-actions">
-            <span class="item-id-tag">ID: ${item.item_id}</span>
-            <button class="btn-test-item" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
-              🧪 测试下单
-            </button>
+            ${priorityBtn}
+            <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+              <span class="item-id-tag">ID: ${item.item_id}</span>
+              <button class="btn-test-item" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
+                🧪 测试下单
+              </button>
+            </div>
           </div>
         </div>
       `;
     }).join("");
   }
 
-  // 6. Update Pagination UI (top & bottom)
+  // 6. Update Pagination UI
   renderPaginationUI({
     totalRaw,
     filteredCount,
@@ -460,7 +686,6 @@ function updateCatalogView(forceRender = false) {
 function renderPaginationUI(info) {
   const { totalRaw, filteredCount, startIndex, endIndex, currentPage, totalPages } = info;
 
-  // Text info
   let infoText = "";
   if (filteredCount === 0) {
     infoText = `显示 <strong>0</strong> 件 / 共 <strong>${totalRaw}</strong> 件商品`;
@@ -475,7 +700,6 @@ function renderPaginationUI(info) {
   if (infoTop) infoTop.innerHTML = infoText;
   if (infoBottom) infoBottom.innerHTML = infoText;
 
-  // Generate page numbers HTML
   const pageNumbers = generatePageNumbers(currentPage, totalPages);
   const pageNumsHtml = pageNumbers.map(p => {
     if (p === "...") {
@@ -490,7 +714,6 @@ function renderPaginationUI(info) {
   if (pageNumbersTop) pageNumbersTop.innerHTML = pageNumsHtml;
   if (pageNumbersBottom) pageNumbersBottom.innerHTML = pageNumsHtml;
 
-  // Update nav buttons disabled state for both bars
   document.querySelectorAll(".pagination-bar").forEach(bar => {
     const btnFirst = bar.querySelector('[data-action="first"]');
     const btnPrev = bar.querySelector('[data-action="prev"]');
@@ -507,7 +730,6 @@ function renderPaginationUI(info) {
   });
 }
 
-// Generate Page Numbers Array (with ellipsis for large page counts)
 function generatePageNumbers(currentPage, totalPages) {
   if (totalPages <= 7) {
     return Array.from({ length: totalPages }, (_, i) => i + 1);
@@ -533,7 +755,6 @@ function generatePageNumbers(currentPage, totalPages) {
   return pages;
 }
 
-// Page Navigation Action
 function goToPage(p, scrollToTop = true) {
   if (p === catalogCurrentPage) return;
   catalogCurrentPage = p;
@@ -544,7 +765,6 @@ function goToPage(p, scrollToTop = true) {
   }
 }
 
-// Reset All Catalog Filters
 window.resetCatalogFilters = function() {
   const filterInput = document.getElementById("catalog-filter");
   const btnClear = document.getElementById("btn-clear-filter");
@@ -572,7 +792,7 @@ function renderHistory(history) {
     const isDry = item.dry_run;
     const tag = isDry ? `<span class="badge badge-info">模拟下单</span>` : `<span class="badge ${isSuccess ? 'badge-running' : 'badge-paused'}">实盘下单</span>`;
     const timelineHtml = (item.timeline && item.timeline.length) 
-      ? `<div class="order-timeline-box">${item.timeline.map(t => `<div>• ${t}</div>`).join("")}</div>`
+      ? `<div class="order-timeline-box">${item.timeline.map(t => `<div>• ${escapeHtml(t)}</div>`).join("")}</div>`
       : "";
 
     return `
@@ -580,12 +800,12 @@ function renderHistory(history) {
         <div class="order-top">
           <div style="display:flex;align-items:center;gap:10px;">
             ${tag}
-            <span class="order-title">${item.item_title || '商品 ID: ' + item.item_id}</span>
+            <span class="order-title">${escapeHtml(item.item_title || '商品 ID: ' + item.item_id)}</span>
           </div>
           <span class="order-timing">${item.elapsed_seconds ? item.elapsed_seconds + 's' : ''}</span>
         </div>
-        <div class="order-msg">${item.message}</div>
-        ${item.order_id ? `<div style="font-size:0.8rem;color:#38bdf8;">订单编号: <b>${item.order_id}</b></div>` : ''}
+        <div class="order-msg">${escapeHtml(item.message)}</div>
+        ${item.order_id ? `<div style="font-size:0.8rem;color:#38bdf8;">订单编号: <b>${escapeHtml(item.order_id)}</b></div>` : ''}
         ${timelineHtml}
       </div>
     `;
@@ -624,12 +844,19 @@ async function fetchConfig() {
 
     const normalInterval = shop.interval_seconds || 3.0;
     const rushInterval = shop.rush_interval_seconds || 0.8;
+    const priorityInterval = shop.priority_interval_seconds || 0.5;
+
     document.getElementById("cfg-interval").value = normalInterval;
     document.getElementById("cfg-rush-interval").value = rushInterval;
+    const cfgPriorityEl = document.getElementById("cfg-priority-interval");
+    if (cfgPriorityEl) cfgPriorityEl.value = priorityInterval;
+
     const qInterval = document.getElementById("quick-interval");
     const qRush = document.getElementById("quick-rush-interval");
+    const qPriority = document.getElementById("quick-priority-interval");
     if (qInterval) qInterval.value = normalInterval;
     if (qRush) qRush.value = rushInterval;
+    if (qPriority) qPriority.value = priorityInterval;
 
     const scanPagesEl = document.getElementById("cfg-scan-pages");
     if (scanPagesEl) scanPagesEl.value = shop.scan_pages || 2;
@@ -638,10 +865,21 @@ async function fetchConfig() {
     const order = cfg.order || {};
     document.getElementById("cfg-max-orders").value = (order.max_orders !== undefined) ? order.max_orders : 1;
     document.getElementById("cfg-quantity").value = order.quantity || 1;
-    const retryCountEl = document.getElementById("cfg-retry-count");
-    if (retryCountEl) retryCountEl.value = (order.retry_count !== undefined) ? order.retry_count : 3;
-    const retryDelayEl = document.getElementById("cfg-retry-delay");
-    if (retryDelayEl) retryDelayEl.value = (order.retry_delay_seconds !== undefined) ? order.retry_delay_seconds : 0.3;
+    
+    const sessionRetriesEl = document.getElementById("cfg-session-retries");
+    if (sessionRetriesEl) sessionRetriesEl.value = (order.session_retries !== undefined) ? order.session_retries : 3;
+    const sessionRetryDelayEl = document.getElementById("cfg-session-retry-delay");
+    if (sessionRetryDelayEl) sessionRetryDelayEl.value = (order.session_retry_delay !== undefined) ? order.session_retry_delay : 0.15;
+    const workerRetriesEl = document.getElementById("cfg-worker-retries");
+    if (workerRetriesEl) workerRetriesEl.value = (order.worker_retries !== undefined) ? order.worker_retries : 5;
+    const workerRetryDelayEl = document.getElementById("cfg-worker-retry-delay");
+    if (workerRetryDelayEl) workerRetryDelayEl.value = (order.worker_retry_delay !== undefined) ? order.worker_retry_delay : 0.2;
+    const maxWorkersEl = document.getElementById("cfg-max-workers");
+    if (maxWorkersEl) maxWorkersEl.value = (order.max_concurrent_workers !== undefined) ? order.max_concurrent_workers : 3;
+    const chkHedgeEl = document.getElementById("chk-hedge-requests");
+    if (chkHedgeEl) chkHedgeEl.checked = (order.hedge_requests !== undefined) ? !!order.hedge_requests : true;
+    const hedgeDelayEl = document.getElementById("cfg-hedge-delay");
+    if (hedgeDelayEl) hedgeDelayEl.value = (order.hedge_delay !== undefined) ? order.hedge_delay : 2.5;
 
     // Notifications (Discord only)
     const notifs = cfg.notifications || {};
@@ -658,51 +896,56 @@ async function fetchConfig() {
 function initIntervalControls() {
   const quickInterval = document.getElementById("quick-interval");
   const quickRush = document.getElementById("quick-rush-interval");
+  const quickPriority = document.getElementById("quick-priority-interval");
   const cfgInterval = document.getElementById("cfg-interval");
   const cfgRush = document.getElementById("cfg-rush-interval");
+  const cfgPriority = document.getElementById("cfg-priority-interval");
 
-  const syncAndSaveNormal = async (val) => {
+  const syncAndSave = async (payload, msg, type = "info") => {
+    try {
+      const resp = await fetch("/api/update-intervals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (resp.ok) {
+        showToast(msg, type);
+      }
+    } catch (e) {
+      showToast("更新间隔失败: " + e.message, "error");
+    }
+  };
+
+  const handleNormal = (val) => {
     const num = parseFloat(val);
     if (isNaN(num) || num <= 0) return;
     if (quickInterval) quickInterval.value = num;
     if (cfgInterval) cfgInterval.value = num;
-    try {
-      const resp = await fetch("/api/update-intervals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interval_seconds: num })
-      });
-      if (resp.ok) {
-        showToast(`⏱️ 日常巡检间隔已设为 ${num} 秒 (即时生效)`, "info");
-      }
-    } catch (e) {
-      showToast("设置日常间隔失败: " + e.message, "error");
-    }
+    syncAndSave({ interval_seconds: num }, `⏱️ 日常巡检间隔已设为 ${num} 秒 (即时生效)`, "info");
   };
 
-  const syncAndSaveRush = async (val) => {
+  const handleRush = (val) => {
     const num = parseFloat(val);
     if (isNaN(num) || num <= 0) return;
     if (quickRush) quickRush.value = num;
     if (cfgRush) cfgRush.value = num;
-    try {
-      const resp = await fetch("/api/update-intervals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rush_interval_seconds: num })
-      });
-      if (resp.ok) {
-        showToast(`⚡ 极速突击间隔已设为 ${num} 秒 (即时生效)`, "warn");
-      }
-    } catch (e) {
-      showToast("设置极速间隔失败: " + e.message, "error");
-    }
+    syncAndSave({ rush_interval_seconds: num }, `⚡ 极速突击间隔已设为 ${num} 秒 (即时生效)`, "warn");
   };
 
-  if (quickInterval) quickInterval.addEventListener("change", (e) => syncAndSaveNormal(e.target.value));
-  if (cfgInterval) cfgInterval.addEventListener("change", (e) => syncAndSaveNormal(e.target.value));
-  if (quickRush) quickRush.addEventListener("change", (e) => syncAndSaveRush(e.target.value));
-  if (cfgRush) cfgRush.addEventListener("change", (e) => syncAndSaveRush(e.target.value));
+  const handlePriority = (val) => {
+    const num = parseFloat(val);
+    if (isNaN(num) || num <= 0) return;
+    if (quickPriority) quickPriority.value = num;
+    if (cfgPriority) cfgPriority.value = num;
+    syncAndSave({ priority_interval_seconds: num }, `📅 预计上线优先扫描间隔已设为 ${num} 秒 (即时生效)`, "info");
+  };
+
+  if (quickInterval) quickInterval.addEventListener("change", (e) => handleNormal(e.target.value));
+  if (cfgInterval) cfgInterval.addEventListener("change", (e) => handleNormal(e.target.value));
+  if (quickRush) quickRush.addEventListener("change", (e) => handleRush(e.target.value));
+  if (cfgRush) cfgRush.addEventListener("change", (e) => handleRush(e.target.value));
+  if (quickPriority) quickPriority.addEventListener("change", (e) => handlePriority(e.target.value));
+  if (cfgPriority) cfgPriority.addEventListener("change", (e) => handlePriority(e.target.value));
 }
 
 // Save Configuration
@@ -716,6 +959,15 @@ async function saveConfig() {
     .split(",")
     .map(s => s.trim())
     .filter(Boolean);
+
+  const priorityIntervalEl = document.getElementById("cfg-priority-interval");
+  const sessionRetriesEl = document.getElementById("cfg-session-retries");
+  const sessionRetryDelayEl = document.getElementById("cfg-session-retry-delay");
+  const workerRetriesEl = document.getElementById("cfg-worker-retries");
+  const workerRetryDelayEl = document.getElementById("cfg-worker-retry-delay");
+  const maxWorkersEl = document.getElementById("cfg-max-workers");
+  const chkHedgeEl = document.getElementById("chk-hedge-requests");
+  const hedgeDelayEl = document.getElementById("cfg-hedge-delay");
 
   const payload = {
     buyer: {
@@ -736,13 +988,19 @@ async function saveConfig() {
       max_price: parseInt(document.getElementById("cfg-max-price").value, 10) || 0,
       interval_seconds: parseFloat(document.getElementById("cfg-interval").value) || 3.0,
       rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8,
+      priority_interval_seconds: priorityIntervalEl ? (parseFloat(priorityIntervalEl.value) || 0.5) : 0.5,
       scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2
     },
     order: {
       max_orders: isNaN(parseInt(document.getElementById("cfg-max-orders").value, 10)) ? 1 : parseInt(document.getElementById("cfg-max-orders").value, 10),
       quantity: parseInt(document.getElementById("cfg-quantity").value, 10) || 1,
-      retry_count: parseInt(document.getElementById("cfg-retry-count").value, 10) || 3,
-      retry_delay_seconds: parseFloat(document.getElementById("cfg-retry-delay").value) || 0.3
+      session_retries: sessionRetriesEl ? (parseInt(sessionRetriesEl.value, 10) || 3) : 3,
+      session_retry_delay: sessionRetryDelayEl ? (parseFloat(sessionRetryDelayEl.value) || 0.15) : 0.15,
+      worker_retries: workerRetriesEl ? (parseInt(workerRetriesEl.value, 10) || 5) : 5,
+      worker_retry_delay: workerRetryDelayEl ? (parseFloat(workerRetryDelayEl.value) || 0.2) : 0.2,
+      max_concurrent_workers: maxWorkersEl ? (parseInt(maxWorkersEl.value, 10) || 3) : 3,
+      hedge_requests: chkHedgeEl ? chkHedgeEl.checked : true,
+      hedge_delay: hedgeDelayEl ? (parseFloat(hedgeDelayEl.value) || 2.5) : 2.5
     },
     notifications: {
       discord: {

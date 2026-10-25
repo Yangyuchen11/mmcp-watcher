@@ -10,6 +10,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "monitor_url": "https://mamachapptoy.cart.fc2.com/?sort=5",
         "interval_seconds": 3.0,
         "rush_interval_seconds": 0.8,
+        "priority_interval_seconds": 0.5,
         "rush_mode": False,
         "target_keywords": [
           "ロングメイド",
@@ -29,7 +30,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "quantity": 1,
         "max_orders": 1,         # Max distinct items to purchase (0 means unlimited / buy all matching items)
         "retry_count": 3,
-        "retry_delay_seconds": 0.5
+        "retry_delay_seconds": 0.3,
+        "session_retries": 3,       # 保持购物车内部快速重试次数
+        "session_retry_delay": 0.15, # 保持购物车内部重试间隔 (秒)
+        "worker_retries": 5,        # 跨会话整单重试次数
+        "worker_retry_delay": 0.2,  # 跨会话重试等待间隔 (秒)
+        "max_concurrent_workers": 3, # Maximum concurrent order threads
+        "hedge_requests": True,     # 响应超时开启并发对冲竞速重试
+        "hedge_delay": 2.5          # 对冲重试启动等待阈值 (秒)
     },
     "buyer": {
         "name": "山田　太郎",

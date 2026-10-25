@@ -28,10 +28,14 @@ class ShopItem:
     in_stock: bool
     stock_text: str
     category_id: Optional[str] = None
+    is_upcoming: bool = False
+    scheduled_time: Optional[str] = None
+    is_priority: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["price_value"] = self.price_value
+        d["status"] = "instock" if self.in_stock else ("upcoming" if self.is_upcoming else "soldout")
         return d
 
     @property
@@ -75,6 +79,29 @@ MAINTENANCE_KEYWORDS = [
     "coming soon"
 ]
 
+UPCOMING_KEYWORDS = [
+    "開始予定",
+    "販売予定",
+    "発売予定",
+    "販売開始前",
+    "予定",
+    "coming soon"
+]
+
+SOLDOUT_KEYWORDS = [
+    "在庫切れ",
+    "完売",
+    "品切れ",
+    "売り切れ",
+    "sold out",
+    "販売終了"
+]
+
+INSTOCK_KEYWORDS = [
+    "在庫あり",
+    "カートに入れる"
+]
+
 class FC2Monitor:
     def __init__(self, base_url: str = "https://mamachapptoy.cart.fc2.com", client: Optional[httpx.AsyncClient] = None):
         self.base_url = base_url.rstrip("/")
@@ -108,6 +135,13 @@ class FC2Monitor:
             return resp.text, resp.status_code
         except Exception as e:
             print(f"[Monitor] Network error fetching {url}: {e}")
+            # If socket broken or HTTP/2 stream terminated, reset client to ensure instant recovery
+            if self.client and not self.client.is_closed:
+                try:
+                    await self.client.aclose()
+                except Exception:
+                    pass
+            self.client = None
             return None, 0
 
     def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
@@ -203,11 +237,28 @@ class FC2Monitor:
             stock_node = node.select_one("dd.stock, .stock")
             stock_text = stock_node.get_text(strip=True) if stock_node else ""
 
-            # In FC2, "在庫切れ" means out of stock.
-            has_soldout = "在庫切れ" in stock_text or "完売" in stock_text
-            has_cart_button = bool(node.select_one(".btn_submit_cart, input[value='カートに入れる']"))
+            has_cart_button = bool(node.select_one(".btn_submit_cart, input[value='カートに入れる'], a[href*='cart_in']"))
 
-            in_stock = (not has_soldout) and (bool(stock_text) or has_cart_button)
+            # Determine upcoming vs sold out vs in stock
+            is_upcoming = any(kw in stock_text for kw in UPCOMING_KEYWORDS)
+            has_soldout = any(kw in stock_text for kw in SOLDOUT_KEYWORDS)
+            has_instock_kw = any(kw in stock_text for kw in INSTOCK_KEYWORDS)
+
+            scheduled_time = None
+            if is_upcoming:
+                # Scheduled / Upcoming: strictly NOT in stock
+                in_stock = False
+                m = re.search(r"([0-9０-９一二三四五六七八九十月日時分:\s~～ー]+?)(?:開始予定|発売予定|販売予定|予定)", stock_text)
+                if m and m.group(1).strip():
+                    scheduled_time = m.group(1).strip()
+                else:
+                    scheduled_time = stock_text
+            elif has_soldout:
+                in_stock = False
+            elif has_cart_button or has_instock_kw:
+                in_stock = True
+            else:
+                in_stock = has_cart_button
 
             item = ShopItem(
                 item_id=str(item_id),
@@ -216,12 +267,94 @@ class FC2Monitor:
                 url=full_url,
                 image_url=img_url,
                 in_stock=in_stock,
-                stock_text=stock_text if stock_text else ("在庫切れ" if not in_stock else "在庫あり"),
-                category_id=category_id
+                stock_text=stock_text if stock_text else ("在庫あり" if in_stock else "在庫切れ"),
+                category_id=category_id,
+                is_upcoming=is_upcoming,
+                scheduled_time=scheduled_time
             )
             items.append(item)
 
         return items
+
+    def parse_single_item_page(self, html: str, url: str) -> Optional[ShopItem]:
+        """Parses a single product detail page (/ca{cat}/{id}/) directly for zero-latency stock checks"""
+        soup = BeautifulSoup(html, DEFAULT_PARSER)
+        item_id = ""
+        category_id = None
+        match = re.search(r"/ca(\d+)/(\d+)/", url)
+        if match:
+            category_id = match.group(1)
+            item_id = match.group(2)
+        else:
+            id_match = re.search(r"/(\d+)/", url)
+            if id_match:
+                item_id = id_match.group(1)
+
+        hidden_id = soup.select_one("input[name='item_id']")
+        if hidden_id and hidden_id.get("value"):
+            item_id = hidden_id["value"]
+
+        if not item_id:
+            return None
+
+        title_node = soup.select_one("#itemdetail_page h2, #item_detail_page h2, .item_detail h2, .contents h2, h2.name, dt.name, title")
+        title = title_node.get_text(strip=True) if title_node else f"商品-{item_id}"
+        if " - " in title:
+            title = title.split(" - ")[0].strip()
+
+        price_node = soup.select_one(".price, .price_replace, dd.price")
+        price = price_node.get_text(strip=True) if price_node else "N/A"
+
+        img_node = soup.select_one(".item_images img, .thumb img, img")
+        img_url = ""
+        if img_node:
+            img_url = img_node.get("src") or img_node.get("data-src") or ""
+            if img_url and not img_url.startswith("http"):
+                img_url = urljoin(self.base_url, img_url)
+
+        stock_node = soup.select_one("dd.stock, .stock")
+        stock_text = stock_node.get_text(strip=True) if stock_node else ""
+
+        has_cart_button = bool(soup.select_one(".btn_submit_cart, input[value='カートに入れる']"))
+
+        is_upcoming = any(kw in stock_text for kw in UPCOMING_KEYWORDS)
+        has_soldout = any(kw in stock_text for kw in SOLDOUT_KEYWORDS)
+        has_instock_kw = any(kw in stock_text for kw in INSTOCK_KEYWORDS)
+
+        scheduled_time = None
+        if is_upcoming:
+            in_stock = False
+            m = re.search(r"([0-9０-９一二三四五六七八九十月日時分:\s~～ー]+?)(?:開始予定|発売予定|販売予定|予定)", stock_text)
+            if m and m.group(1).strip():
+                scheduled_time = m.group(1).strip()
+            else:
+                scheduled_time = stock_text
+        elif has_soldout:
+            in_stock = False
+        elif has_cart_button or has_instock_kw:
+            in_stock = True
+        else:
+            in_stock = has_cart_button
+
+        return ShopItem(
+            item_id=str(item_id),
+            title=title,
+            price=price,
+            url=url,
+            image_url=img_url,
+            in_stock=in_stock,
+            stock_text=stock_text if stock_text else ("在庫あり" if in_stock else "在庫切れ"),
+            category_id=category_id,
+            is_upcoming=is_upcoming,
+            scheduled_time=scheduled_time
+        )
+
+    async def check_item_detail(self, item_url: str) -> Optional[ShopItem]:
+        """Fetches and checks a single product detail page directly"""
+        html, status = await self.fetch_page(item_url)
+        if not html or status != 200:
+            return None
+        return self.parse_single_item_page(html, item_url)
 
     async def scan_full_catalog(self, max_pages: int = 15) -> List[ShopItem]:
         """
@@ -260,8 +393,10 @@ class FC2Monitor:
         """
         Compares current items with known snapshot.
         Detects:
+        - Upcoming item officially dropping ("UPCOMING_DROPPED") -> Top Priority Auto-Order!
         - Brand new in-stock items ("NEW_IN_STOCK")
         - Restocked existing items ("RESTOCKED")
+        - Newly scheduled upcoming items ("NEW_UPCOMING")
         - New out-of-stock announcements ("NEW_OUT_OF_STOCK")
         Filters items by keywords and price range (min_price and max_price in JPY).
         """
@@ -302,18 +437,28 @@ class FC2Monitor:
                 if self.is_initialized:
                     if item.in_stock:
                         triggers.append(("NEW_IN_STOCK", item))
+                    elif item.is_upcoming:
+                        triggers.append(("NEW_UPCOMING", item))
                     else:
                         triggers.append(("NEW_OUT_OF_STOCK", item))
                 else:
                     # On first startup: if item is already in stock, trigger it!
                     if item.in_stock:
                         triggers.append(("NEW_IN_STOCK", item))
+                    elif item.is_upcoming:
+                        triggers.append(("NEW_UPCOMING", item))
                 self.known_items[item.item_id] = item
             else:
                 prev_item = self.known_items[item.item_id]
-                # If an existing item transitioned from out-of-stock to in-stock!
-                if not prev_item.in_stock and item.in_stock:
+                # Transition 1: Previously UPCOMING (or scheduled) and now IN STOCK!
+                if prev_item.is_upcoming and item.in_stock:
+                    triggers.append(("UPCOMING_DROPPED", item))
+                # Transition 2: Previously sold out and now restocked!
+                elif not prev_item.in_stock and item.in_stock:
                     triggers.append(("RESTOCKED", item))
+                # Transition 3: Newly scheduled as upcoming from sold out
+                elif not prev_item.is_upcoming and item.is_upcoming:
+                    triggers.append(("NEW_UPCOMING", item))
                 # Update snapshot
                 self.known_items[item.item_id] = item
 

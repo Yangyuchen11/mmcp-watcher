@@ -34,10 +34,11 @@ class FC2Checkout:
             "Pragma": "no-cache"
         }
         # Dedicated client to maintain cookies / session for an order attempt
+        # Snappy timeouts (3s connect, 5s read) prevent thread from hanging when server is congested
         self.client = httpx.AsyncClient(
             headers=self.headers,
-            timeout=httpx.Timeout(15.0, connect=5.0),
-            http2=HAS_HTTP2,
+            timeout=httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=5.0),
+            http2=False,  # HTTP/1.1 is strictly more stable for FC2 Cart CGI regi forms under heavy load
             follow_redirects=True
         )
 
@@ -79,9 +80,13 @@ class FC2Checkout:
                     return False, last_error
 
                 html = resp.text
+                # Check for explicit out-of-stock messages
+                if any(kw in html for kw in ["在庫切れ", "売り切れ", "完売", "品切れ"]):
+                    return False, f"加购失败：商品在庫切れ已售罄 ({elapsed_ms}ms)"
+
                 # Check if cart is empty
                 if "カートに商品は入っていません" in html:
-                    return False, f"加购失败：购物车为空，商品可能已售罄 ({elapsed_ms}ms)"
+                    return False, f"加购未完成：购物车为空或尚未开放 ({elapsed_ms}ms)"
 
                 # Check if checkout button exists
                 if "/regi" in html or "btn_submit_checkout" in html or "レジへすすむ" in html:
@@ -340,12 +345,14 @@ class FC2Checkout:
         timeline.append(f"加购: {cart_msg}")
         if not cart_ok:
             await self.close()
+            is_soldout = any(k in cart_msg for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
                 "dry_run": self.dry_run,
                 "item_id": item_id,
                 "item_title": item_title,
                 "message": cart_msg,
+                "is_soldout": is_soldout,
                 "timeline": timeline,
                 "elapsed_seconds": round(time.perf_counter() - start_time, 2)
             }
@@ -355,12 +362,14 @@ class FC2Checkout:
         if not regi_ok:
             timeline.append(f"获取结算表单失败: {regi_err}")
             await self.close()
+            is_soldout = any(k in str(regi_err) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
                 "dry_run": self.dry_run,
                 "item_id": item_id,
                 "item_title": item_title,
                 "message": regi_err,
+                "is_soldout": is_soldout,
                 "timeline": timeline,
                 "elapsed_seconds": round(time.perf_counter() - start_time, 2)
             }
@@ -371,12 +380,14 @@ class FC2Checkout:
         timeline.append(f"提交订单信息: {info_msg}")
         if not info_ok or not confirm_html:
             await self.close()
+            is_soldout = any(k in str(info_msg) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
                 "dry_run": self.dry_run,
                 "item_id": item_id,
                 "item_title": item_title,
                 "message": info_msg,
+                "is_soldout": is_soldout,
                 "timeline": timeline,
                 "elapsed_seconds": round(time.perf_counter() - start_time, 2)
             }
@@ -389,6 +400,7 @@ class FC2Checkout:
         final_res.update({
             "item_id": item_id,
             "item_title": item_title,
+            "is_soldout": False,
             "timeline": timeline,
             "elapsed_seconds": round(time.perf_counter() - start_time, 2)
         })

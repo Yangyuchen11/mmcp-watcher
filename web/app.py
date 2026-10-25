@@ -53,6 +53,10 @@ def create_app(config_path: str = "config.json") -> FastAPI:
             "stats": bot.stats,
             "recent_items": catalog_display,
             "catalog_total": len(catalog_display),
+            "upcoming_items": bot.get_upcoming_items(),
+            "upcoming_count": len(bot.upcoming_items),
+            "active_orders": bot.get_active_orders(),
+            "priority_item_ids": list(bot.priority_item_ids),
             "is_in_maintenance": bot.is_in_maintenance,
             "order_history": bot.order_history[:10],
             "config": bot.config
@@ -61,7 +65,47 @@ def create_app(config_path: str = "config.json") -> FastAPI:
     @app.post("/api/sync-catalog")
     async def sync_catalog():
         count = await bot.sync_full_catalog()
-        return {"success": True, "count": count}
+        return {"success": True, "count": count, "upcoming_count": len(bot.upcoming_items)}
+
+    @app.get("/api/upcoming")
+    async def get_upcoming():
+        return {
+            "success": True,
+            "items": bot.get_upcoming_items(),
+            "count": len(bot.upcoming_items)
+        }
+
+    @app.post("/api/upcoming/scan")
+    async def scan_upcoming():
+        items = await bot.scan_upcoming_items_now()
+        return {
+            "success": True,
+            "items": items,
+            "count": len(items)
+        }
+
+    @app.post("/api/upcoming/priority")
+    async def toggle_priority(payload: Dict[str, Any]):
+        item_id = str(payload.get("item_id", "")).strip()
+        if not item_id:
+            raise HTTPException(status_code=400, detail="item_id is required")
+        is_priority = bot.toggle_item_priority(item_id)
+        return {"success": True, "item_id": item_id, "is_priority": is_priority}
+
+    @app.get("/api/orders/active")
+    async def get_active_orders():
+        return {
+            "success": True,
+            "active_orders": bot.get_active_orders()
+        }
+
+    @app.post("/api/orders/cancel")
+    async def cancel_order(payload: Dict[str, Any]):
+        item_id = str(payload.get("item_id", "")).strip()
+        if not item_id:
+            raise HTTPException(status_code=400, detail="item_id is required")
+        ok = bot.cancel_order_worker(item_id)
+        return {"success": ok, "item_id": item_id}
 
     @app.post("/api/start")
     async def start_bot():
@@ -82,11 +126,13 @@ def create_app(config_path: str = "config.json") -> FastAPI:
     async def update_intervals(payload: Dict[str, Any]):
         interval = payload.get("interval_seconds")
         rush_interval = payload.get("rush_interval_seconds")
-        bot.update_intervals(interval, rush_interval)
+        priority_interval = payload.get("priority_interval_seconds")
+        bot.update_intervals(interval, rush_interval, priority_interval)
         return {
             "success": True,
             "interval_seconds": bot.config.get("shop", {}).get("interval_seconds", 3.0),
-            "rush_interval_seconds": bot.config.get("shop", {}).get("rush_interval_seconds", 0.8)
+            "rush_interval_seconds": bot.config.get("shop", {}).get("rush_interval_seconds", 0.8),
+            "priority_interval_seconds": bot.config.get("shop", {}).get("priority_interval_seconds", 0.5)
         }
 
     @app.post("/api/toggle-dry-run")

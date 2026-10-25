@@ -2,8 +2,9 @@
   "shop": {
     "base_url": "https://mamachapptoy.cart.fc2.com",
     "monitor_url": "https://mamachapptoy.cart.fc2.com/?sort=5",
-    "interval_seconds": 3.0,
+    "interval_seconds": 3,
     "rush_interval_seconds": 0.8,
+    "priority_interval_seconds": 0.5,
     "rush_mode": false,
     "target_keywords": [
       "ロングメイド",
@@ -23,7 +24,14 @@
     "quantity": 1,
     "max_orders": 1,
     "retry_count": 3,
-    "retry_delay_seconds": 0.5
+    "retry_delay_seconds": 0.3,
+    "session_retries": 3,
+    "session_retry_delay": 0.15,
+    "worker_retries": 5,
+    "worker_retry_delay": 0.2,
+    "max_concurrent_workers": 5,
+    "hedge_requests": true,
+    "hedge_delay": 2.5
   },
   "buyer": {
     "name": "山田　太郎",

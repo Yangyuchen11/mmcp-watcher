@@ -35,6 +35,11 @@
             <input type="number" id="quick-rush-interval" step="0.1" min="0.2" max="10" value="0.8">
             <span class="pill-unit">s</span>
           </div>
+          <div class="interval-pill priority" title="预计上线商品优先扫描间隔 (单位: 秒，输入自动生效)">
+            <span class="pill-label">📅优先</span>
+            <input type="number" id="quick-priority-interval" step="0.1" min="0.1" max="10" value="0.5">
+            <span class="pill-unit">s</span>
+          </div>
         </div>
 
         <!-- Rush Mode Switch -->
@@ -64,6 +69,17 @@
       🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（0.8s），开售后毫秒级抢购！
     </div>
 
+    <!-- Active Concurrent Orders Live Banner -->
+    <div id="active-orders-banner" class="active-orders-banner" style="display:none;">
+      <div class="active-orders-header">
+        <span class="pulse-indicator"></span>
+        <span class="active-orders-title">⚡ 正在多线程并发抢购中:</span>
+      </div>
+      <div id="active-orders-list" class="active-orders-chips">
+        <!-- Worker status chips dynamically injected here -->
+      </div>
+    </div>
+
     <!-- Stat Metrics Ribbon -->
     <section class="metrics-grid">
       <div class="metric-card">
@@ -75,6 +91,24 @@
         <div class="metric-sub" id="val-last-scan">最后扫描: --:--:--</div>
       </div>
 
+      <div class="metric-card clickable" id="card-metric-upcoming" title="点击切换至预计上线专区">
+        <div class="metric-header">
+          <span class="title">📅 预计上线商品</span>
+          <span class="badge badge-upcoming" id="badge-upcoming-metric">0 款</span>
+        </div>
+        <div class="metric-value" id="val-upcoming-count">0 款</div>
+        <div class="metric-sub" id="val-upcoming-sub">独立高频优先扫描</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="title">⚡ 并发抢购线程</span>
+          <span class="badge badge-neutral" id="badge-threads">Workers</span>
+        </div>
+        <div class="metric-value" id="val-active-workers">0 / 3</div>
+        <div class="metric-sub" id="val-threads-sub">多线程独立加购会话</div>
+      </div>
+
       <div class="metric-card">
         <div class="metric-header">
           <span class="title">累计巡检</span>
@@ -82,15 +116,6 @@
         </div>
         <div class="metric-value" id="val-total-scans">0</div>
         <div class="metric-sub" id="val-scan-speed">响应耗时: -- ms</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-header">
-          <span class="title">发现目标商品</span>
-          <span class="badge badge-info">Matches</span>
-        </div>
-        <div class="metric-value" id="val-total-matches">0</div>
-        <div class="metric-sub">符合关键词或补货</div>
       </div>
 
       <div class="metric-card">
@@ -105,13 +130,18 @@
 
     <!-- Main Workspace -->
     <main class="main-content">
-      <!-- Left Panel: Tabs for Catalog, History, Terminal -->
+      <!-- Left Panel: Tabs for Catalog, Upcoming, History, Terminal -->
       <div class="primary-column">
         <div class="tabs-nav">
           <button class="tab-btn active" data-tab="tab-catalog">
             <span class="tab-icon">🛍️</span>
             <span>实时货架与商品</span>
             <span class="tab-badge" id="catalog-count">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-upcoming">
+            <span class="tab-icon">📅</span>
+            <span>预计上线专区</span>
+            <span class="tab-badge upcoming-badge" id="tab-upcoming-count">0</span>
           </button>
           <button class="tab-btn" data-tab="tab-history">
             <span class="tab-icon">📜</span>
@@ -148,6 +178,7 @@
               <div class="stock-filter-group">
                 <button type="button" class="stock-pill active" data-stock="all">全部 <span class="pill-badge" id="count-all">0</span></button>
                 <button type="button" class="stock-pill" data-stock="instock">仅看有货 <span class="pill-badge instock" id="count-instock">0</span></button>
+                <button type="button" class="stock-pill upcoming-pill" data-stock="upcoming">📅 预计上线 <span class="pill-badge upcoming" id="count-upcoming">0</span></button>
                 <button type="button" class="stock-pill" data-stock="soldout">仅看售罄 <span class="pill-badge soldout" id="count-soldout">0</span></button>
               </div>
 
@@ -197,6 +228,35 @@
           </div>
         </div>
 
+        <!-- Tab 2: Upcoming Drops (预计上线专区) -->
+        <div class="tab-pane" id="tab-upcoming">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>📅 预计上线商品专区 (開始予定)</h3>
+              <p>官方已公布开始预定日期的商品。系统开启独立高频扫描线程优先盯紧，一旦开售（转为有货）立刻调用并发下单线程发起抢购！</p>
+            </div>
+            <div class="pane-tools">
+              <button id="btn-sync-upcoming" class="btn-xs btn-primary" title="扫描商城全部 12 页并提取所有预计上线商品">🔄 全页面扫描预计上线商品</button>
+            </div>
+          </div>
+
+          <!-- Upcoming Priority Info Banner -->
+          <div class="upcoming-status-banner">
+            <div class="banner-icon">⚡</div>
+            <div class="banner-text">
+              <strong>独立高频优先扫描 + 并发抢购机制运行中：</strong>
+              <span>优先扫描线程正以毫秒级频率监视下方预计上线商品。一旦开售，独立并发下单线程将迅速重复尝试加购结算，绝不阻塞其他扫描任务。</span>
+            </div>
+          </div>
+
+          <div class="catalog-grid" id="upcoming-items-container">
+            <div class="empty-state">
+              <div class="spinner"></div>
+              <p>正在同步预计上线商品...</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Tab 2: Order History -->
         <div class="tab-pane" id="tab-history">
           <div class="pane-header">
@@ -230,157 +290,232 @@
         </div>
       </div>
 
-      <!-- Right Panel: Settings / Buyer Profile -->
+      <!-- Right Column: Split Panels -->
       <aside class="sidebar-column">
-        <div class="card settings-card">
+
+        <!-- Panel 1: 下单信息面板 -->
+        <div class="card settings-panel-card" id="panel-buyer-info">
           <div class="card-header">
-            <span class="card-icon">⚙️</span>
-            <h4>下单信息与配置</h4>
-            <button id="btn-save-config" class="btn-sm btn-primary">保存配置</button>
+            <div class="card-header-title">
+              <span class="card-icon">👤</span>
+              <h4>下单收件信息 (FC2レジ)</h4>
+            </div>
+            <button class="btn-sm btn-primary btn-save-config">保存配置</button>
           </div>
 
-          <div class="settings-body">
-            <!-- Buyer Info Section -->
-            <div class="section-group">
-              <h5 class="section-title">👤 收件人与地址 (FC2レジ)</h5>
-              
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-name">姓名 (お名前)</label>
-                  <input type="text" id="cfg-name" placeholder="例: 山田　太郎">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-name-kana">片假名 (フリガナ)</label>
-                  <input type="text" id="cfg-name-kana" placeholder="例: ヤマダ　タロウ">
-                </div>
-              </div>
-
+          <div class="panel-card-body">
+            <div class="form-row">
               <div class="form-group">
-                <label for="cfg-email">电子邮箱 (メールアドレス)</label>
-                <input type="email" id="cfg-email" placeholder="例: example@gmail.com">
+                <label for="cfg-name">姓名 (お名前)</label>
+                <input type="text" id="cfg-name" placeholder="例: 山田　太郎">
               </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-tel">电话号码 (電話番号)</label>
-                  <input type="text" id="cfg-tel" placeholder="例: 08012345678">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-postcode">邮政编码 (郵便番号)</label>
-                  <input type="text" id="cfg-postcode" placeholder="例: 1000001">
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-prefecture">都道府县 (都道府県)</label>
-                  <input type="text" id="cfg-prefecture" placeholder="例: 東京都">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-payment">支付方式</label>
-                  <input type="text" id="cfg-payment" value="代金引換" placeholder="优先代金引換">
-                </div>
-              </div>
-
               <div class="form-group">
-                <label for="cfg-address">详细住址 (ご住所)</label>
-                <textarea id="cfg-address" rows="2" placeholder="市区町村、番地、建物名・部屋番号"></textarea>
-              </div>
-
-              <div class="form-group">
-                <label for="cfg-biko">备注 (備考，可选)</label>
-                <input type="text" id="cfg-biko" placeholder="可选留言">
+                <label for="cfg-name-kana">片假名 (フリガナ)</label>
+                <input type="text" id="cfg-name-kana" placeholder="例: ヤマダ　タロウ">
               </div>
             </div>
 
-            <!-- Monitoring Rules Section -->
-            <div class="section-group">
-              <h5 class="section-title">🎯 监控与抢购规则</h5>
+            <div class="form-group">
+              <label for="cfg-email">电子邮箱 (メールアドレス)</label>
+              <input type="email" id="cfg-email" placeholder="例: example@gmail.com">
+            </div>
 
+            <div class="form-row">
               <div class="form-group">
-                <label for="cfg-keywords">目标关键词 (逗号分隔，留空则监控所有新品)</label>
-                <input type="text" id="cfg-keywords" placeholder="如: ロングメイド, ひなちゃん, ちぃち">
+                <label for="cfg-tel">电话号码 (電話番号)</label>
+                <input type="text" id="cfg-tel" placeholder="例: 08012345678">
               </div>
-
               <div class="form-group">
-                <label for="cfg-exclude">排除关键词 (逗号分隔)</label>
-                <input type="text" id="cfg-exclude" placeholder="如: ソフビ, 怪獣">
+                <label for="cfg-postcode">邮政编码 (郵便番号)</label>
+                <input type="text" id="cfg-postcode" placeholder="例: 1000001">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-prefecture">都道府县 (都道府県)</label>
+                <input type="text" id="cfg-prefecture" placeholder="例: 東京都">
+              </div>
+              <div class="form-group">
+                <label for="cfg-payment">支付方式</label>
+                <input type="text" id="cfg-payment" value="代金引換" placeholder="优先代金引換">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-address">详细住址 (ご住所)</label>
+              <textarea id="cfg-address" rows="2" placeholder="市区町村、番地、建物名・部屋番号"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-biko">备注 (備考，可选)</label>
+              <input type="text" id="cfg-biko" placeholder="可选留言">
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 2: 配置面板 (分为 扫描设置 与 下单设置 两大板块) -->
+        <div class="card settings-panel-card" id="panel-system-config">
+          <div class="card-header">
+            <div class="card-header-title">
+              <span class="card-icon">⚙️</span>
+              <h4>监控与下单配置面板</h4>
+            </div>
+            <button class="btn-sm btn-primary btn-save-config">保存配置</button>
+          </div>
+
+          <div class="panel-card-body">
+            <!-- 板块 1: 扫描相关设置 -->
+            <div class="config-block">
+              <div class="config-block-header">
+                <div class="block-title-row">
+                  <span class="config-block-badge scan-badge">🔍 扫描设置</span>
+                  <h5 class="config-block-title">货架与商品扫描相关设置</h5>
+                </div>
+                <p class="config-block-desc">控制商品监控关键词、价格过滤、扫描间隔与轮询深度</p>
               </div>
 
-              <div class="form-row">
+              <div class="config-block-body">
                 <div class="form-group">
-                  <label for="cfg-min-price" title="商品最低金额（日元），低于该价格的商品将自动忽略（不提醒不抢购）。0为不设下限">金额下限 (円，0为不限)</label>
-                  <input type="number" id="cfg-min-price" min="0" step="100" value="0" placeholder="0">
+                  <label for="cfg-keywords">目标关键词 (逗号分隔，留空则监控所有新品)</label>
+                  <input type="text" id="cfg-keywords" placeholder="如: ロングメイド, ひなちゃん, ちぃち">
                 </div>
-                <div class="form-group">
-                  <label for="cfg-max-price" title="商品最高金额（日元），高于该价格的商品将自动忽略（不提醒不抢购）。0为不设上限">金额上限 (円，0为不限)</label>
-                  <input type="number" id="cfg-max-price" min="0" step="100" value="0" placeholder="0">
-                </div>
-              </div>
 
-              <div class="form-row">
                 <div class="form-group">
-                  <label for="cfg-interval">日常巡检间隔 (秒)</label>
-                  <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
+                  <label for="cfg-exclude">排除关键词 (逗号分隔)</label>
+                  <input type="text" id="cfg-exclude" placeholder="如: ソフビ, 怪獣">
                 </div>
-                <div class="form-group">
-                  <label for="cfg-rush-interval">极速巡检间隔 (秒)</label>
-                  <input type="number" id="cfg-rush-interval" step="0.1" min="0.3" value="0.8">
-                </div>
-              </div>
 
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-max-orders" title="目标抢购的不同商品款式总数。0为不限（上架几款买几款，每款严格限购1件）；填N为买齐N款后自动停止">目标购买款数 (0为不限)</label>
-                  <input type="number" id="cfg-max-orders" min="0" value="1">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-min-price" title="商品最低金额（日元），低于该价格的商品将自动忽略。0为不设下限">金额下限 (円，0为不限)</label>
+                    <input type="number" id="cfg-min-price" min="0" step="100" value="0" placeholder="0">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-max-price" title="商品最高金额（日元），高于该价格的商品将自动忽略。0为不设上限">金额上限 (円，0为不限)</label>
+                    <input type="number" id="cfg-max-price" min="0" step="100" value="0" placeholder="0">
+                  </div>
                 </div>
+
+                <div class="form-row-3">
+                  <div class="form-group">
+                    <label for="cfg-interval" title="常态监控时的页面轮询扫描间隔">日常巡检间隔 (秒)</label>
+                    <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-rush-interval" title="极速突击模式下的页面轮询间隔">极速巡检间隔 (秒)</label>
+                    <input type="number" id="cfg-rush-interval" step="0.1" min="0.3" value="0.8">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-priority-interval" title="预计上线商品独立优先扫描间隔时间（秒，建议0.3~0.5秒）">预计上线优先间隔 (秒)</label>
+                    <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" max="5.0" value="0.5">
+                  </div>
+                </div>
+
                 <div class="form-group">
-                  <label for="cfg-scan-pages" title="每次轮询扫描前N页（每页20件，默认前2页=40件最新修改商品，并发秒级拉取）">轮询扫描深度 (页数)</label>
+                  <label for="cfg-scan-pages" title="每次轮询扫描前N页（每页20件，默认前2页=40件最新修改商品，并发秒级拉取）">轮询扫描深度 (每次扫描前 N 页)</label>
                   <input type="number" id="cfg-scan-pages" min="1" max="6" value="2">
                 </div>
-                <div class="form-group">
-                  <label for="cfg-quantity">单件商品购买数量 (默认1)</label>
-                  <input type="number" id="cfg-quantity" min="1" value="1">
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-retry-count" title="加购或结算遭遇 502/503/网络超时时的连续自动重试次数 (建议3~5次)">下单异常重试次数</label>
-                  <input type="number" id="cfg-retry-count" min="1" max="10" value="3">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-retry-delay" title="每次重试之间的等待间隔时间（秒，建议0.2~0.5秒）">重试等待间隔 (秒)</label>
-                  <input type="number" id="cfg-retry-delay" step="0.1" min="0.1" max="3.0" value="0.3">
-                </div>
               </div>
             </div>
 
-            <!-- Notifications Section -->
-            <div class="section-group">
-              <div class="section-header-flex">
-                <h5 class="section-title">🔔 消息通知推送</h5>
-                <button id="btn-test-notify" class="btn-xs btn-ghost">测试通知</button>
+            <!-- 板块 2: 下单时相关设置 -->
+            <div class="config-block">
+              <div class="config-block-header">
+                <div class="block-title-row">
+                  <span class="config-block-badge order-badge">⚡ 下单设置</span>
+                  <h5 class="config-block-title">下单与并发抢购相关设置</h5>
+                </div>
+                <p class="config-block-desc">控制自动抢购款数、单品件数、并发线程数与繁忙重试策略</p>
               </div>
 
-              <!-- Discord Webhook Only -->
-              <div class="notify-channel">
-                <div class="channel-header">
-                  <label class="switch-label">
-                    <input type="checkbox" id="chk-dc-enable">
-                    <span>Discord Webhook 推送</span>
-                  </label>
+              <div class="config-block-body">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-max-orders" title="目标抢购的不同商品款式总数。0为不限；填N为买齐N款后自动停止">目标购买款数 (0为不限)</label>
+                    <input type="number" id="cfg-max-orders" min="0" value="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-quantity" title="每款商品加入购物车的数量">单品购买数量 (默认1)</label>
+                    <input type="number" id="cfg-quantity" min="1" value="1">
+                  </div>
                 </div>
-                <div class="channel-inputs">
-                  <input type="text" id="cfg-dc-url" placeholder="https://discord.com/api/webhooks/...">
+
+                <div class="form-group">
+                  <label for="cfg-max-workers" title="同时允许并发独立下单的商品线程数（每个商品使用独立 Session）">最大并发抢购线程数</label>
+                  <input type="number" id="cfg-max-workers" min="1" max="10" value="3">
                 </div>
-                <p style="font-size: 0.72rem; color: #64748b; margin-top: 2px;">
-                  填入 Discord 频道生成的 Webhook URL 并在左上方勾选开启即可。
-                </p>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-session-retries" title="加购成功后，若结算遭遇 502/503 或超时，在保持购物车 Cookie 的前提下就地极速重试的次数">保持购物车重试次数</label>
+                    <input type="number" id="cfg-session-retries" min="1" max="15" value="3">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-session-retry-delay" title="保持购物车会话内的快速重试间隔时间（秒，建议 0.05~0.2 秒）">保持购物车重试间隔 (秒)</label>
+                    <input type="number" id="cfg-session-retry-delay" step="0.05" min="0.05" max="1.0" value="0.15">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-worker-retries" title="整单抢购若彻底断连或会话失效，重新建立独立新 Session 持续冲击抢购的最大轮数">换会话整单重试轮数</label>
+                    <input type="number" id="cfg-worker-retries" min="1" max="20" value="5">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-worker-retry-delay" title="换新会话重试之间的等待间隔（建议 0.1~0.3 秒）">整单重试等待间隔 (秒)</label>
+                    <input type="number" id="cfg-worker-retry-delay" step="0.1" min="0.05" max="2.0" value="0.2">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group" style="justify-content: flex-end; padding-bottom: 4px;">
+                    <label class="switch-label" style="font-size: 0.78rem;" title="开启后，若请求在设定秒数内未响应，保持原请求等待的同时，并发启动新的对冲重试线程双向竞速！">
+                      <input type="checkbox" id="chk-hedge-requests" checked>
+                      <span>并发对冲竞速重试</span>
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-hedge-delay" title="发送请求后超过多少秒未响应则启动并发对冲线程（建议 2.0~3.0 秒）">对冲启动阈值 (秒)</label>
+                    <input type="number" id="cfg-hedge-delay" step="0.5" min="1.0" max="8.0" value="2.5">
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
+
+        <!-- Panel 3: 通知面板 (用于 Discord 设置) -->
+        <div class="card settings-panel-card" id="panel-notifications">
+          <div class="card-header">
+            <div class="card-header-title">
+              <span class="card-icon">🔔</span>
+              <h4>通知面板 (Discord 设置)</h4>
+            </div>
+            <div class="card-header-actions">
+              <button id="btn-test-notify" class="btn-xs btn-ghost">测试通知</button>
+              <button class="btn-sm btn-primary btn-save-config">保存配置</button>
+            </div>
+          </div>
+
+          <div class="panel-card-body">
+            <div class="notify-channel">
+              <div class="channel-header">
+                <label class="switch-label">
+                  <input type="checkbox" id="chk-dc-enable">
+                  <span>启用 Discord Webhook 推送</span>
+                </label>
+              </div>
+              <div class="channel-inputs">
+                <input type="text" id="cfg-dc-url" placeholder="https://discord.com/api/webhooks/...">
+              </div>
+              <p class="notify-help-text">
+                填入 Discord 频道生成的 Webhook URL 并在左上方勾选开启即可。系统开售、优先抢购或售罄状态将即时推送到频道。
+              </p>
+            </div>
+          </div>
+        </div>
+
       </aside>
     </main>
   </div>
