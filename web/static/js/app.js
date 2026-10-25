@@ -1,6 +1,7 @@
 // State variables
 let currentStatus = null;
 let currentConfig = null;
+let currentDryRun = true;
 let sseConnection = null;
 let catalogItems = [];
 let upcomingItems = [];
@@ -82,8 +83,10 @@ function initEventHandlers() {
     try {
       const resp = await fetch("/api/toggle-dry-run", { method: "POST" });
       const data = await resp.json();
-      showToast(data.dry_run ? "🛡️ 模拟模式已开启 (不实际扣款/下单)" : "⚠️ 实盘下单模式已开启！有货将直接提交订单！", data.dry_run ? "info" : "warn");
+      currentDryRun = !!data.dry_run;
+      showToast(data.dry_run ? "🛡️ 模拟下单模式已开启 (安全模式，不实际下单)" : "⚠️ 真实下单模式已开启！遇到有货商品将直接提交正式订单！", data.dry_run ? "info" : "warn");
       fetchStatus();
+      updateCatalogView(true);
     } catch (e) {
       showToast("切换失败: " + e, "error");
     }
@@ -392,10 +395,25 @@ function renderStatus(data) {
   btnRush.className = `pill-btn ${rush ? "rush-on" : "rush-off"}`;
   btnRush.querySelector(".status-indicator").textContent = rush ? "ON" : "OFF";
 
-  // Header Dry Run
+  // Header Dry Run / Live Order Switch
   const btnDry = document.getElementById("btn-toggle-dry");
-  btnDry.className = `pill-btn ${dry ? "dry-on" : "dry-off"}`;
-  btnDry.querySelector(".status-indicator").textContent = dry ? "ON" : "OFF";
+  if (btnDry) {
+    if (dry) {
+      btnDry.className = "pill-btn dry-on";
+      btnDry.title = "当前为模拟下单模式（不扣款），点击切换为真实下单模式";
+      btnDry.innerHTML = `<span class="icon">🛡️</span><span class="label">模拟下单模式</span>`;
+    } else {
+      btnDry.className = "pill-btn dry-off real-order-active";
+      btnDry.title = "⚠️ 当前为真实下单模式（实盘下单），点击切换为模拟下单模式";
+      btnDry.innerHTML = `<span class="icon">⚡</span><span class="label">真实下单模式</span>`;
+    }
+  }
+
+  // Detect Dry Run Mode Changes and Refresh Order Buttons
+  if (currentDryRun !== !!dry) {
+    currentDryRun = !!dry;
+    updateCatalogView(true);
+  }
 
   // Metrics
   const badgeStatus = document.getElementById("badge-status");
@@ -404,6 +422,10 @@ function renderStatus(data) {
     badgeStatus.className = "badge badge-running";
     badgeStatus.textContent = `🚨 商城维护中 (${curRushVal}s 突击)`;
     valStatusText.textContent = "⚡ 发售前警戒";
+  } else if (data.auto_rush_active) {
+    badgeStatus.className = "badge badge-running";
+    badgeStatus.textContent = `⚡ 开售极速冲刺中 (${curRushVal}s)`;
+    valStatusText.textContent = "⚡ 极速突击";
   } else if (isRunning) {
     badgeStatus.className = "badge badge-running";
     badgeStatus.textContent = "🟢 运行中";
@@ -531,8 +553,8 @@ function renderUpcomingView(items) {
           <span class="badge-priority-auto">⚡ 独立优先扫描中</span>
           <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
             <span class="item-id-tag">ID: ${item.item_id}</span>
-            <button class="btn-test-item" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
-              🧪 测试加购
+            <button class="btn-test-item ${currentDryRun ? '' : 'btn-real-order'}" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
+              ${currentDryRun ? '🧪 测试加购' : '⚡ 真实加购'}
             </button>
           </div>
         </div>
@@ -544,7 +566,7 @@ function renderUpcomingView(items) {
 // Catalog Fingerprint to avoid unnecessary DOM re-renders during 2s polling
 function getCatalogSignature(items) {
   if (!items || items.length === 0) return "";
-  return items.length + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : (i.is_upcoming ? 2 : 0)}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
+  return items.length + ":" + (currentDryRun ? 1 : 0) + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : (i.is_upcoming ? 2 : 0)}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
 }
 
 // Update Catalog View with Active Filters & Pagination
@@ -670,8 +692,8 @@ function updateCatalogView(forceRender = false) {
             ${priorityBtn}
             <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
               <span class="item-id-tag">ID: ${item.item_id}</span>
-              <button class="btn-test-item" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
-                🧪 测试下单
+              <button class="btn-test-item ${currentDryRun ? '' : 'btn-real-order'}" onclick="openTestModal('${item.item_id}', '${encodeURIComponent(item.title)}')">
+                ${currentDryRun ? '🧪 测试下单' : '⚡ 真实下单'}
               </button>
             </div>
           </div>
@@ -877,17 +899,13 @@ async function fetchConfig() {
     const cfgPriorityHedgeTimeoutEl = document.getElementById("cfg-priority-hedge-timeout");
     if (cfgPriorityHedgeTimeoutEl) cfgPriorityHedgeTimeoutEl.value = priorityHedgeTimeout;
 
-    const qInterval = document.getElementById("quick-interval");
-    const qRush = document.getElementById("quick-rush-interval");
-    const qPriority = document.getElementById("quick-priority-interval");
-    if (qInterval) qInterval.value = normalInterval;
-    if (qRush) qRush.value = rushInterval;
-    if (qPriority) qPriority.value = priorityInterval;
     const bannerRushEl = document.getElementById("banner-rush-interval");
     if (bannerRushEl) bannerRushEl.textContent = rushInterval;
 
     const scanPagesEl = document.getElementById("cfg-scan-pages");
     if (scanPagesEl) scanPagesEl.value = shop.scan_pages || 2;
+    const autoRushDurEl = document.getElementById("cfg-auto-rush-duration");
+    if (autoRushDurEl) autoRushDurEl.value = (shop.auto_rush_duration_seconds !== undefined) ? shop.auto_rush_duration_seconds : 60;
 
     // Order
     const order = cfg.order || {};
@@ -920,11 +938,8 @@ async function fetchConfig() {
   }
 }
 
-// Interactive Interval Controls (Header + Sidebar Live Sync)
+// Interactive Interval Controls (Sidebar Settings Live Sync)
 function initIntervalControls() {
-  const quickInterval = document.getElementById("quick-interval");
-  const quickRush = document.getElementById("quick-rush-interval");
-  const quickPriority = document.getElementById("quick-priority-interval");
   const cfgInterval = document.getElementById("cfg-interval");
   const cfgRush = document.getElementById("cfg-rush-interval");
   const cfgPriority = document.getElementById("cfg-priority-interval");
@@ -947,7 +962,6 @@ function initIntervalControls() {
   const handleNormal = (val) => {
     const num = parseFloat(val);
     if (isNaN(num) || num <= 0) return;
-    if (quickInterval) quickInterval.value = num;
     if (cfgInterval) cfgInterval.value = num;
     syncAndSave({ interval_seconds: num }, `⏱️ 日常巡检间隔已设为 ${num} 秒 (即时生效)`, "info");
   };
@@ -955,7 +969,6 @@ function initIntervalControls() {
   const handleRush = (val) => {
     const num = parseFloat(val);
     if (isNaN(num) || num <= 0) return;
-    if (quickRush) quickRush.value = num;
     if (cfgRush) cfgRush.value = num;
     const bannerRushEl = document.getElementById("banner-rush-interval");
     if (bannerRushEl) bannerRushEl.textContent = num;
@@ -965,16 +978,12 @@ function initIntervalControls() {
   const handlePriority = (val) => {
     const num = parseFloat(val);
     if (isNaN(num) || num <= 0) return;
-    if (quickPriority) quickPriority.value = num;
     if (cfgPriority) cfgPriority.value = num;
     syncAndSave({ priority_interval_seconds: num }, `📅 预计上线优先扫描间隔已设为 ${num} 秒 (即时生效)`, "info");
   };
 
-  if (quickInterval) quickInterval.addEventListener("change", (e) => handleNormal(e.target.value));
   if (cfgInterval) cfgInterval.addEventListener("change", (e) => handleNormal(e.target.value));
-  if (quickRush) quickRush.addEventListener("change", (e) => handleRush(e.target.value));
   if (cfgRush) cfgRush.addEventListener("change", (e) => handleRush(e.target.value));
-  if (quickPriority) quickPriority.addEventListener("change", (e) => handlePriority(e.target.value));
   if (cfgPriority) cfgPriority.addEventListener("change", (e) => handlePriority(e.target.value));
 
   const cfgPriorityRush = document.getElementById("cfg-priority-rush-interval");
@@ -1039,7 +1048,8 @@ async function saveConfig() {
       priority_hedge_enabled: chkPriorityHedgeEl ? chkPriorityHedgeEl.checked : true,
       priority_hedge_delay: priorityHedgeDelayEl ? (parseFloat(priorityHedgeDelayEl.value) || 1.5) : 1.5,
       priority_hedge_timeout_seconds: priorityHedgeTimeoutEl ? (parseFloat(priorityHedgeTimeoutEl.value) || 2.0) : 2.0,
-      scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2
+      scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2,
+      auto_rush_duration_seconds: document.getElementById("cfg-auto-rush-duration") ? (parseInt(document.getElementById("cfg-auto-rush-duration").value, 10) || 60) : 60
     },
     order: {
       max_orders: isNaN(parseInt(document.getElementById("cfg-max-orders").value, 10)) ? 1 : parseInt(document.getElementById("cfg-max-orders").value, 10),
@@ -1125,11 +1135,33 @@ window.openTestModal = function(itemId, encodedTitle) {
   const title = decodeURIComponent(encodedTitle || "");
   document.getElementById("modal-item-id").value = itemId;
   document.getElementById("modal-item-name").value = title;
+
+  const modalTitle = document.getElementById("modal-test-title");
+  const modalDesc = document.getElementById("modal-test-desc");
+  const submitBtn = document.getElementById("btn-submit-modal-test");
+
+  if (currentDryRun) {
+    if (modalTitle) modalTitle.textContent = "🧪 自定义商品下单测试";
+    if (modalDesc) modalDesc.textContent = "输入商品 ID 进行完整结算链条测试（当前为模拟下单模式，不会实际扣款或生成正式订单）。";
+    if (submitBtn) {
+      submitBtn.textContent = "立即测试下单";
+      submitBtn.className = "btn btn-primary";
+    }
+  } else {
+    if (modalTitle) modalTitle.textContent = "⚡ 商品真实下单确认";
+    if (modalDesc) modalDesc.textContent = "⚠️ 警告：当前处于【真实下单模式】！提交后将以实盘数据（收件人地址与货到付款）立即向 FC2 提交正式订单！请务必确认商品 ID！";
+    if (submitBtn) {
+      submitBtn.textContent = "⚡ 立即真实下单";
+      submitBtn.className = "btn btn-danger";
+    }
+  }
+
   document.getElementById("modal-test-order").classList.add("active");
 };
 
 async function triggerTestOrder(itemId, title) {
-  showToast(`🧪 正在发起测试下单 (ID: ${itemId})...`, "info");
+  const actionName = currentDryRun ? "测试下单" : "真实下单";
+  showToast(currentDryRun ? `🧪 正在发起测试下单 (ID: ${itemId})...` : `⚡ 正在发起真实下单 (ID: ${itemId})...`, currentDryRun ? "info" : "warn");
   try {
     const resp = await fetch("/api/test-checkout", {
       method: "POST",
@@ -1140,7 +1172,7 @@ async function triggerTestOrder(itemId, title) {
     if (res.success) {
       showToast(res.message, "success");
     } else {
-      showToast("测试未完成: " + res.message, "warn");
+      showToast(`${actionName}未完成: ` + res.message, "warn");
     }
     fetchStatus();
   } catch (e) {

@@ -26,6 +26,7 @@ class BotEngine:
         # Dual scanning task handles
         self.catalog_monitor_task: Optional[asyncio.Task] = None
         self.priority_monitor_task: Optional[asyncio.Task] = None
+        self.daily_schedule_task: Optional[asyncio.Task] = None
         self.monitor_task: Optional[asyncio.Task] = None  # Backwards compatibility
         
         self.monitor = FC2Monitor(
@@ -63,6 +64,10 @@ class BotEngine:
         self.priority_monitor_tasks: Dict[str, asyncio.Task] = {}   # item_id -> isolated direct detail polling Task
         self._order_semaphore: Optional[asyncio.Semaphore] = None
         self.is_in_maintenance: bool = False
+        self.auto_rush_active: bool = False
+        self.auto_rush_start_time: float = 0.0
+        self.auto_rush_end_time: float = 0.0
+        self.auto_rush_has_scanned_after_open: bool = False
         self._wake_event_catalog: Optional[asyncio.Event] = None
         self._wake_event_priority: Optional[asyncio.Event] = None
 
@@ -213,9 +218,10 @@ class BotEngine:
         # Async trigger full catalog sync on startup to discover all upcoming items
         asyncio.create_task(self.sync_full_catalog())
 
-        # Start dual concurrent scanning loops
+        # Start dual concurrent scanning loops and daily 05:00 JST full catalog refresh
         self.catalog_monitor_task = asyncio.create_task(self._catalog_monitor_loop())
         self.priority_monitor_task = asyncio.create_task(self._priority_monitor_loop())
+        self.daily_schedule_task = asyncio.create_task(self._daily_schedule_loop())
         self.monitor_task = self.catalog_monitor_task
 
     def interrupt_sleep(self):
@@ -254,7 +260,7 @@ class BotEngine:
                 t.cancel()
         self.priority_monitor_tasks.clear()
 
-        for t in [self.catalog_monitor_task, self.priority_monitor_task]:
+        for t in [self.catalog_monitor_task, self.priority_monitor_task, self.daily_schedule_task]:
             if t:
                 t.cancel()
                 try:
@@ -264,6 +270,7 @@ class BotEngine:
 
         self.catalog_monitor_task = None
         self.priority_monitor_task = None
+        self.daily_schedule_task = None
         self.monitor_task = None
         self.stats["last_scan_status"] = "Paused"
         self.log("WARN", "⏸️ 监控机器人已暂停")
@@ -378,7 +385,7 @@ class BotEngine:
                 break
 
             shop_cfg = self.config.get("shop", {})
-            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance
+            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance or self.auto_rush_active
             # Use dedicated priority_rush_interval_seconds in rush mode, otherwise priority_interval_seconds
             interval = float(shop_cfg.get("priority_rush_interval_seconds", 0.3)) if rush_mode else float(shop_cfg.get("priority_interval_seconds", 0.5))
             timeout = float(shop_cfg.get("priority_timeout_seconds", 4.0))
@@ -434,7 +441,7 @@ class BotEngine:
         while self.is_running:
             shop_cfg = self.config.get("shop", {})
             monitor_url = shop_cfg.get("monitor_url", f"{self.monitor.base_url}/?sort=5")
-            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance
+            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance or self.auto_rush_active
             interval = shop_cfg.get("rush_interval_seconds", 0.8) if rush_mode else shop_cfg.get("interval_seconds", 3.0)
             target_keywords = shop_cfg.get("target_keywords", [])
             exclude_keywords = shop_cfg.get("exclude_keywords", [])
@@ -463,12 +470,14 @@ class BotEngine:
                 self.stats["total_scans"] += 1
                 self.stats["last_scan_time"] = now_jst().strftime("%H:%M:%S")
                 self.stats["is_in_maintenance"] = is_maintenance
+                self.stats["auto_rush_active"] = self.auto_rush_active
                 self.stats["active_workers_count"] = len(self.active_order_tasks)
 
                 # Handle Maintenance Transition
                 if is_maintenance:
                     if not self.is_in_maintenance:
                         self.is_in_maintenance = True
+                        self.auto_rush_active = True
                         rush_int = self.config.get("shop", {}).get("rush_interval_seconds", 0.8)
                         reason_tag = f"【原因: {maint_reason}】" if maint_reason else ""
                         self.log("WARN", f"🚨 【发售前维护侦测】检测到 Mamachapp 商城进入维护中！{reason_tag} 通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询 ({rush_int}s)！")
@@ -483,10 +492,15 @@ class BotEngine:
                 else:
                     if self.is_in_maintenance:
                         self.is_in_maintenance = False
-                        self.log("SUCCESS", "⚡ 【维护结束！新品开售！】商城已恢复访问，正在以毫秒级速度执行全量库存扫描与抢购！")
+                        self.auto_rush_active = True
+                        auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
+                        self.auto_rush_start_time = time.time()
+                        self.auto_rush_end_time = time.time() + auto_rush_dur
+                        self.auto_rush_has_scanned_after_open = False
+                        self.log("SUCCESS", f"⚡ 【维护结束！新品开售！】商城已恢复访问！自动极速抢购突击已启动（预设持续 {int(auto_rush_dur)}s，或扫描商品全部售罄后提前退出）！")
                         await self.dispatcher.broadcast(
                             title="⚡ 【维护结束！新品开售！】Mamachapp 商城已开售！",
-                            content="店铺维护已完成，商城已重新开放！机器人正在毫秒级扫描新上架及补货商品，一有库存即刻下单！",
+                            content=f"店铺维护已完成，商城已重新开放！机器人正在以极速突击轮询（预设持续 {int(auto_rush_dur)}s）执行全量库存扫描与抢购！",
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
                         triggers = self.monitor.check_matches(
@@ -504,6 +518,13 @@ class BotEngine:
                     self.stats["last_scan_status"] = f"空页面复检中 ({self.monitor.empty_catalog_consecutive}/{empty_threshold})"
                     await self._sleep_interruptible_catalog(1.0)
                     continue
+
+                # Auto Rush Exit Criteria Check: strictly exits only when configured duration expires
+                if self.auto_rush_active and not self.is_in_maintenance:
+                    auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
+                    if time.time() >= self.auto_rush_end_time:
+                        self.auto_rush_active = False
+                        self.log("INFO", f"🏁 【极速突击结束】已达到设定的持续时间 ({int(auto_rush_dur)}s)，极速模式自动安全降级为日常巡检。")
 
                 if items:
                     self.stats["last_scan_status"] = f"OK ({len(items)}件最新商品, {elapsed_ms}ms)"
@@ -538,6 +559,30 @@ class BotEngine:
             await self._sleep_interruptible_catalog(interval)
 
     # =========================================================================
+    # THREAD 3: Daily Scheduled Full Catalog Sync (每日凌晨 05:00 JST 全量同步)
+    # =========================================================================
+    async def _daily_schedule_loop(self):
+        """Triggers a full catalog refresh every day at 05:00 JST"""
+        while self.is_running:
+            now = now_jst()
+            target = now.replace(hour=5, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += datetime.timedelta(days=1)
+            wait_seconds = max(1.0, (target - now).total_seconds())
+            target_str = target.strftime("%Y-%m-%d %H:%M:%S")
+            self.log("INFO", f"⏰ [每日定时全量同步就绪] 下一次全量刷新预定于 JST {target_str} (约 {int(wait_seconds / 3600)} 小时后)")
+            try:
+                await asyncio.sleep(wait_seconds)
+                if self.is_running:
+                    self.log("INFO", "🌅 [每日定时同步 05:00 JST] 正在执行全商城商品全量索引刷新...")
+                    await self.sync_full_catalog()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.log("WARN", f"每日定时同步发生异常: {e}")
+                await asyncio.sleep(60)
+
+    # =========================================================================
     # EVENT DISPATCH & MULTI-THREAD ORDER WORKERS (非阻塞并发抢购池)
     # =========================================================================
     def _process_trigger_event(self, event_type: str, item: ShopItem):
@@ -555,13 +600,16 @@ class BotEngine:
         is_instock_event = event_type in ("UPCOMING_DROPPED", "NEW_IN_STOCK", "RESTOCKED")
         self.log("SUCCESS" if is_instock_event else "INFO", f"{title} -> {item.title} ({item.price})")
 
-        # Async broadcast notification
-        asyncio.create_task(self.dispatcher.broadcast(
-            title=title,
-            content=msg,
-            url=item.url,
-            extra={"image_url": item.image_url}
-        ))
+        # Async broadcast notification only for:
+        # 1. New upcoming product ("NEW_UPCOMING")
+        # 2. In-stock / dropped products ("UPCOMING_DROPPED", "NEW_IN_STOCK", "RESTOCKED")
+        if event_type in ("UPCOMING_DROPPED", "NEW_IN_STOCK", "RESTOCKED", "NEW_UPCOMING"):
+            asyncio.create_task(self.dispatcher.broadcast(
+                title=title,
+                content=msg,
+                url=item.url,
+                extra={"image_url": item.image_url}
+            ))
 
         # Register upcoming item if newly detected as upcoming
         if item.is_upcoming:

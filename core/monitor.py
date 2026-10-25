@@ -1,4 +1,5 @@
 import re
+import math
 import asyncio
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
@@ -494,13 +495,31 @@ class FC2Monitor:
                 if it.item_id not in self.known_items:
                     self.known_items[it.item_id] = it
 
-        # Detect total pages from pagination links e.g. /?sort=5&page=11 -> page 11 (12 pages total)
-        page_nums = [int(p) for p in re.findall(r"page=(\d+)", page0_html)]
-        total_pages = min(max_pages, max(page_nums) + 1 if page_nums else 12)
+        # Detect total items count from .pagerbox p (e.g. <p>（全商品239件）</p>) or category count
+        soup0 = BeautifulSoup(page0_html, DEFAULT_PARSER)
+        pager_p = soup0.select_one(".pagerbox p")
+        total_items_count = None
+        if pager_p:
+            m = re.search(r"(\d+)", pager_p.get_text())
+            if m:
+                total_items_count = int(m.group(1))
+
+        if not total_items_count:
+            # Fallback regex for "全商品(\d+)件" or "全表示 \((\d+)\)"
+            m = re.search(r"全[^\(\d]{0,10}\(?(\d+)\)?", page0_html)
+            if m:
+                total_items_count = int(m.group(1))
+
+        if total_items_count and total_items_count > 0:
+            # FC2 lists 20 items per page
+            total_pages = min(max_pages, math.ceil(total_items_count / 20))
+        else:
+            page_nums = [int(p) for p in re.findall(r"page=(\d+)", page0_html)]
+            total_pages = min(max_pages, max(page_nums) + 1 if page_nums else 12)
 
         # 2. Fetch remaining pages (page 1 to total_pages - 1) in parallel
         if total_pages > 1:
-            sem = asyncio.Semaphore(4)
+            sem = asyncio.Semaphore(5)
 
             async def _fetch_with_sem(p: int):
                 async with sem:

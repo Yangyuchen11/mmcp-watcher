@@ -58,6 +58,7 @@ def create_app(config_path: str = "config.json") -> FastAPI:
             "active_orders": bot.get_active_orders(),
             "priority_item_ids": list(bot.priority_item_ids),
             "is_in_maintenance": bot.is_in_maintenance,
+            "auto_rush_active": getattr(bot, "auto_rush_active", False),
             "order_history": bot.order_history[:10],
             "config": bot.config
         }

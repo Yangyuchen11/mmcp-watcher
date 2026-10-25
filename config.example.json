@@ -17,7 +17,8 @@
     "priority_hedge_delay": 1.5,
     "priority_hedge_timeout_seconds": 2.0,
     "empty_catalog_threshold": 2,
-    "enable_empty_catalog_detection": true
+    "enable_empty_catalog_detection": true,
+    "auto_rush_duration_seconds": 60
   },
   "order": {
     "auto_buy": true,

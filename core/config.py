@@ -22,7 +22,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "priority_hedge_delay": 1.5,
         "priority_hedge_timeout_seconds": 2.0,
         "empty_catalog_threshold": 2,          # 连续无商品页面判定为隐式维护的次数 (0为关闭)
-        "enable_empty_catalog_detection": True # 是否启用连续空页面隐式维护熔断
+        "enable_empty_catalog_detection": True, # 是否启用连续空页面隐式维护熔断
+        "auto_rush_duration_seconds": 60       # 开售自动开启极速模式持续时间 (秒，默认为60秒)
     },
     "order": {
         "auto_buy": True,
