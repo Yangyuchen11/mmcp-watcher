@@ -381,7 +381,7 @@
                   </div>
                   <div class="form-group">
                     <label for="cfg-auto-rush-duration"
-                      title="开售/维护结束自动触发极速突击的持续时间（秒）。若在此时间内检测到所有扫描深度内的商品已售罄，也将提前安全退出极速模式">开售自动极速持续 (秒)</label>
+                      title="开售/维护结束自动触发极速突击的持续时间（秒），达到设定时间后自动恢复日常巡检">开售自动极速持续 (秒)</label>
                     <input type="number" id="cfg-auto-rush-duration" min="10" max="600" step="5" value="60">
                   </div>
                 </div>
@@ -513,7 +513,7 @@
                 </div>
 
                 <div class="form-row">
-                  <div class="form-group" style="flex: 1 1 100%;">
+                  <div class="form-group">
                     <label>维护结束瞬时直发加购</label>
                     <div class="checkbox-control-box"
                       title="开启后，在商城维护结束的瞬间，无需等待详情页加载，直接对所有预计上线与重点商品并行发起加购下单线程！页面详情监控将同步进行，并在读取到售罄或抢购成功后自动停止尝试。">
@@ -522,6 +522,11 @@
                         <span>⚡ 直发加购</span>
                       </label>
                     </div>
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-maint-direct-retries"
+                      title="维护结束触发瞬时直发加购时，每个商品独立线程的最大重试轮数（默认60轮，持续冲击直至买到或页面确认售罄）">直发加购重试轮数</label>
+                    <input type="number" id="cfg-maint-direct-retries" min="1" max="500" value="60">
                   </div>
                 </div>
               </div>
@@ -592,7 +597,7 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=3.7"></script>
+  <script src="/static/js/app.js?v=3.8"></script>
 </body>
 
 </html>

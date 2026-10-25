@@ -70,7 +70,7 @@ function initEventHandlers() {
     try {
       const resp = await fetch("/api/toggle-rush", { method: "POST" });
       const data = await resp.json();
-      const rushVal = document.getElementById("quick-rush-interval") ? document.getElementById("quick-rush-interval").value : "0.8";
+      const rushVal = document.getElementById("cfg-rush-interval") ? document.getElementById("cfg-rush-interval").value : "0.8";
       showToast(data.rush_mode ? `⚡ 极速抢购模式已开启 (${rushVal}s)` : "日常巡检模式已恢复", "warn");
       fetchStatus();
     } catch (e) {
@@ -357,7 +357,9 @@ function renderStatus(data) {
   const dry = data.dry_run;
   const stats = data.stats;
 
-  const curRushVal = document.getElementById("quick-rush-interval") ? document.getElementById("quick-rush-interval").value : "0.8";
+  const curRushVal = document.getElementById("cfg-rush-interval")
+    ? document.getElementById("cfg-rush-interval").value
+    : (data.config?.shop?.rush_interval_seconds || "0.8");
 
   // Maintenance banner check
   const banner = document.getElementById("maintenance-alert-banner");
@@ -562,7 +564,7 @@ function renderUpcomingView(items) {
 // Catalog Fingerprint to avoid unnecessary DOM re-renders during 2s polling
 function getCatalogSignature(items) {
   if (!items || items.length === 0) return "";
-  return items.length + ":" + (currentDryRun ? 1 : 0) + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : (i.is_upcoming ? 2 : 0)}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
+  return items.length + ":" + (currentDryRun ? 1 : 0) + ":" + items.map(i => `${i.item_id}_${i.in_stock ? 1 : (i.is_upcoming ? 2 : (i.stock_text === "状態不明" ? 3 : 0))}_${priorityItemIds.has(i.item_id) ? 1 : 0}`).join(",");
 }
 
 // Update Catalog View with Active Filters & Pagination
@@ -580,7 +582,7 @@ function updateCatalogView(forceRender = false) {
   const totalRaw = catalogItems.length;
   const inStockRaw = catalogItems.filter(i => !!i.in_stock).length;
   const upcomingRaw = catalogItems.filter(i => !!i.is_upcoming).length;
-  const soldOutRaw = catalogItems.filter(i => !i.in_stock && !i.is_upcoming).length;
+  const soldOutRaw = catalogItems.filter(i => !i.in_stock && !i.is_upcoming && i.stock_text !== "状態不明").length;
 
   const countAllEl = document.getElementById("count-all");
   const countInEl = document.getElementById("count-instock");
@@ -601,7 +603,7 @@ function updateCatalogView(forceRender = false) {
   } else if (catalogStockFilter === "upcoming") {
     filtered = filtered.filter(i => !!i.is_upcoming);
   } else if (catalogStockFilter === "soldout") {
-    filtered = filtered.filter(i => !i.in_stock && !i.is_upcoming);
+    filtered = filtered.filter(i => !i.in_stock && !i.is_upcoming && i.stock_text !== "状態不明");
   }
 
   // 3. Filter items by search query (title or item_id)
@@ -648,7 +650,8 @@ function updateCatalogView(forceRender = false) {
   } else {
     container.innerHTML = pageItems.map(item => {
       const isUpcoming = !!item.is_upcoming;
-      const isSoldOut = !item.in_stock && !item.is_upcoming;
+      const isUnknown = !item.in_stock && !item.is_upcoming && item.stock_text === "状態不明";
+      const isSoldOut = !item.in_stock && !item.is_upcoming && !isUnknown;
       const isPriority = priorityItemIds.has(item.item_id);
 
       let cardClass = "catalog-card";
@@ -662,6 +665,9 @@ function updateCatalogView(forceRender = false) {
       } else if (item.in_stock) {
         stockClass = "stock-instock";
         stockText = "在庫あり (有库存)";
+      } else if (isUnknown) {
+        stockClass = "stock-upcoming";
+        stockText = "⏳ 状態不明 (待复检)";
       }
 
       const imgHtml = item.image_url 
@@ -924,6 +930,8 @@ async function fetchConfig() {
     if (hedgeDelayEl) hedgeDelayEl.value = (order.hedge_delay !== undefined) ? order.hedge_delay : 2.5;
     const chkMaintDirectEl = document.getElementById("chk-maintenance-direct-order");
     if (chkMaintDirectEl) chkMaintDirectEl.checked = (order.enable_maintenance_direct_order !== undefined) ? !!order.enable_maintenance_direct_order : true;
+    const maintDirectRetriesEl = document.getElementById("cfg-maint-direct-retries");
+    if (maintDirectRetriesEl) maintDirectRetriesEl.value = (order.maintenance_direct_worker_retries !== undefined) ? order.maintenance_direct_worker_retries : 60;
 
     // Notifications (Discord only)
     const notifs = cfg.notifications || {};
@@ -1021,6 +1029,7 @@ async function saveConfig() {
   const chkHedgeEl = document.getElementById("chk-hedge-requests");
   const hedgeDelayEl = document.getElementById("cfg-hedge-delay");
   const chkMaintDirectEl = document.getElementById("chk-maintenance-direct-order");
+  const maintDirectRetriesEl = document.getElementById("cfg-maint-direct-retries");
 
   const payload = {
     buyer: {
@@ -1060,7 +1069,8 @@ async function saveConfig() {
       max_concurrent_workers: maxWorkersEl ? (parseInt(maxWorkersEl.value, 10) || 3) : 3,
       hedge_requests: chkHedgeEl ? chkHedgeEl.checked : true,
       hedge_delay: hedgeDelayEl ? (parseFloat(hedgeDelayEl.value) || 2.5) : 2.5,
-      enable_maintenance_direct_order: chkMaintDirectEl ? chkMaintDirectEl.checked : true
+      enable_maintenance_direct_order: chkMaintDirectEl ? chkMaintDirectEl.checked : true,
+      maintenance_direct_worker_retries: maintDirectRetriesEl ? (parseInt(maintDirectRetriesEl.value, 10) || 60) : 60
     },
     notifications: {
       discord: {
