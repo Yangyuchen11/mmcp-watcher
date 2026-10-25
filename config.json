@@ -2,9 +2,9 @@
   "shop": {
     "base_url": "https://mamachapptoy.cart.fc2.com",
     "monitor_url": "https://mamachapptoy.cart.fc2.com/?sort=5",
-    "interval_seconds": 3,
+    "interval_seconds": 45.0,
     "rush_interval_seconds": 0.8,
-    "priority_interval_seconds": 0.5,
+    "priority_interval_seconds": 10.0,
     "rush_mode": false,
     "target_keywords": [
       "ロングメイド",

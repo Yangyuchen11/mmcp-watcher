@@ -103,10 +103,11 @@ class FC2Checkout:
 
         return False, last_error
 
-    async def get_regi_form(self) -> Tuple[bool, Optional[str], Optional[str]]:
+    async def get_regi_form(self) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """
-        Step 2a: GET /regi to inspect the form and fetch available payment methods
-        Returns: (success, selected_payment_value, error_message)
+        Step 2a: GET /regi to inspect the form, extract hidden fields, and identify
+        payment method, delivery method, and delivery time options.
+        Returns: (success, form_context, error_message)
         """
         regi_url = f"{self.base_url}/regi"
         last_error = ""
@@ -126,30 +127,109 @@ class FC2Checkout:
                     return False, None, "商品在结算时售罄 (カートにある商品が売り切れました)"
 
                 soup = BeautifulSoup(html, "html.parser")
-                payment_select = soup.select_one("select[name='payment_method']")
-                selected_val = ""
+                form = soup.select_one("form[action*='regi'], #checkout_page form, form[name='form']")
+                if not form:
+                    form = soup.select_one("form[method='post']")
 
-                if payment_select:
-                    options = payment_select.find_all("option")
-                    preferred = self.buyer_info.get("payment_method", "代金引換")
-                    
-                    # Try finding preferred method
-                    for opt in options:
-                        opt_val = opt.get("value", "")
-                        opt_text = opt.get_text(strip=True)
-                        if preferred and (preferred in opt_text or preferred in opt_val):
-                            selected_val = opt_val
-                            break
+                form_ctx: Dict[str, Any] = {
+                    "payment_method": "",
+                    "delivery_method": "",
+                    "delivery_time": "",
+                    "time_field_name": "",
+                    "delivery_date": "",
+                    "date_field_name": "",
+                    "hidden_fields": {}
+                }
 
-                    # If not matched, pick first option with value
-                    if not selected_val and options:
+                if form:
+                    # 1. Capture all hidden inputs (tokens, session IDs, ticket tokens)
+                    for inp in form.find_all("input", type="hidden"):
+                        name = inp.get("name")
+                        val = inp.get("value", "")
+                        if name and name != "Submit1":
+                            form_ctx["hidden_fields"][name] = val
+
+                    # 2. Payment method (e.g. 代金引換)
+                    pay_select = form.select_one("select[name='payment_method']")
+                    preferred_pay = self.buyer_info.get("payment_method", "代金引換")
+                    if pay_select:
+                        options = pay_select.find_all("option")
                         for opt in options:
                             v = opt.get("value", "")
-                            if v:
-                                selected_val = v
+                            t = opt.get_text(strip=True)
+                            if preferred_pay and (preferred_pay in t or preferred_pay in v):
+                                form_ctx["payment_method"] = v
                                 break
+                        if not form_ctx["payment_method"] and options:
+                            for opt in options:
+                                v = opt.get("value", "")
+                                if v:
+                                    form_ctx["payment_method"] = v
+                                    break
+                    else:
+                        radios = form.find_all("input", type="radio", attrs={"name": "payment_method"})
+                        for r in radios:
+                            if "checked" in r.attrs or (preferred_pay and preferred_pay in r.get("value", "")):
+                                form_ctx["payment_method"] = r.get("value", "")
+                                break
+                        if not form_ctx["payment_method"] and radios:
+                            form_ctx["payment_method"] = radios[0].get("value", "")
 
-                return True, selected_val, None
+                    # 3. Delivery method (e.g. 宅急便 - 必须项)
+                    deli_select = form.select_one("select[name='delivery_method']")
+                    preferred_deli = self.buyer_info.get("delivery_method", "宅急便")
+                    if deli_select:
+                        options = deli_select.find_all("option")
+                        for opt in options:
+                            v = opt.get("value", "")
+                            t = opt.get_text(strip=True)
+                            if preferred_deli and (preferred_deli in t or preferred_deli in v):
+                                form_ctx["delivery_method"] = v
+                                break
+                        if not form_ctx["delivery_method"] and options:
+                            for opt in options:
+                                v = opt.get("value", "")
+                                if v:
+                                    form_ctx["delivery_method"] = v
+                                    break
+                    else:
+                        radios = form.find_all("input", type="radio", attrs={"name": "delivery_method"})
+                        for r in radios:
+                            if "checked" in r.attrs or (preferred_deli and preferred_deli in r.get("value", "")):
+                                form_ctx["delivery_method"] = r.get("value", "")
+                                break
+                        if not form_ctx["delivery_method"] and radios:
+                            form_ctx["delivery_method"] = radios[0].get("value", "")
+
+                    # 4. Delivery time (配達時間の指定: 优先 '指定なし' 或第一个选项)
+                    time_select = form.select_one("select[name='derivery[time]'], select[name='delivery[time]'], select[name='delivery_time'], select[name*='time']")
+                    if time_select:
+                        form_ctx["time_field_name"] = time_select.get("name", "derivery[time]")
+                        for opt in time_select.find_all("option"):
+                            t = opt.get_text(strip=True)
+                            if "指定なし" in t or "希望なし" in t:
+                                form_ctx["delivery_time"] = opt.get("value", "")
+                                break
+                        else:
+                            first_opt = time_select.find("option")
+                            if first_opt:
+                                form_ctx["delivery_time"] = first_opt.get("value", "")
+
+                    # 5. Delivery date (配達日の指定)
+                    date_select = form.select_one("select[name='derivery[date]'], select[name='delivery[date]'], select[name='delivery_date'], select[name*='date']")
+                    if date_select:
+                        form_ctx["date_field_name"] = date_select.get("name", "derivery[date]")
+                        for opt in date_select.find_all("option"):
+                            t = opt.get_text(strip=True)
+                            if "指定なし" in t or "希望なし" in t:
+                                form_ctx["delivery_date"] = opt.get("value", "")
+                                break
+                        else:
+                            first_opt = date_select.find("option")
+                            if first_opt:
+                                form_ctx["delivery_date"] = first_opt.get("value", "")
+
+                return True, form_ctx, None
             except Exception as e:
                 last_error = f"GET /regi 异常: {e}"
                 if attempt < self.retry_count:
@@ -159,18 +239,24 @@ class FC2Checkout:
 
         return False, None, last_error
 
-    async def submit_regi_info(self, payment_method_val: str) -> Tuple[bool, Optional[str], str]:
+    async def submit_regi_info(self, form_context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str], str]:
         """
         Step 2b: POST buyer details to /regi
+        Submits exact customer information, payment method, delivery method, and hidden parameters.
         Returns: (success, confirmation_html, message)
         """
         regi_url = f"{self.base_url}/regi"
+        ctx = form_context or {}
 
         import unicodedata
         postcode = unicodedata.normalize('NFKC', str(self.buyer_info.get("postal_code", "1000001"))).strip()
         tel = unicodedata.normalize('NFKC', str(self.buyer_info.get("tel", "08012345678"))).strip()
 
-        post_data = {
+        # Seed with hidden form fields
+        post_data: Dict[str, str] = dict(ctx.get("hidden_fields", {}))
+
+        # Core buyer inputs strictly matching FC2 form (mmcp-nyuryoku.txt)
+        post_data.update({
             "address[in][name]": self.buyer_info.get("name", "山田　太郎"),
             "address[in][kkana]": self.buyer_info.get("name_kana", "ヤマダ　タロウ"),
             "address[in][mail]": self.buyer_info.get("email", "buyer_example@gmail.com"),
@@ -180,9 +266,23 @@ class FC2Checkout:
             "address[in][ken]": self.buyer_info.get("prefecture", "東京都"),
             "address[in][address]": self.buyer_info.get("address", "千代田区千代田1-1"),
             "address[in][biko]": self.buyer_info.get("biko", ""),
-            "payment_method": payment_method_val,
+            "payment_method": ctx.get("payment_method") or self.buyer_info.get("payment_method", "代金引換"),
             "Submit1": "true"
-        }
+        })
+
+        # Include delivery method if discovered on page
+        if ctx.get("delivery_method"):
+            post_data["delivery_method"] = str(ctx["delivery_method"])
+
+        # Include delivery time if discovered on page
+        time_name = ctx.get("time_field_name")
+        if time_name and "delivery_time" in ctx:
+            post_data[time_name] = str(ctx["delivery_time"])
+
+        # Include delivery date if discovered on page
+        date_name = ctx.get("date_field_name")
+        if date_name and "delivery_date" in ctx:
+            post_data[date_name] = str(ctx["delivery_date"])
 
         req_headers = {
             **self.headers,
@@ -357,9 +457,9 @@ class FC2Checkout:
                 "elapsed_seconds": round(time.perf_counter() - start_time, 2)
             }
 
-        # 2. Get regi form payment options
-        regi_ok, payment_val, regi_err = await self.get_regi_form()
-        if not regi_ok:
+        # 2. Get regi form payment & delivery options
+        regi_ok, form_ctx, regi_err = await self.get_regi_form()
+        if not regi_ok or not form_ctx:
             timeline.append(f"获取结算表单失败: {regi_err}")
             await self.close()
             is_soldout = any(k in str(regi_err) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
@@ -373,10 +473,13 @@ class FC2Checkout:
                 "timeline": timeline,
                 "elapsed_seconds": round(time.perf_counter() - start_time, 2)
             }
-        timeline.append(f"支付方式选择: {payment_val or '默认'}")
+        pay_str = form_ctx.get('payment_method') or '默认'
+        deli_str = form_ctx.get('delivery_method') or '默认'
+        time_str = form_ctx.get('delivery_time') or '指定なし'
+        timeline.append(f"表单识别: 支付={pay_str}, 配送={deli_str}, 时间={time_str}")
 
         # 3. Submit buyer details
-        info_ok, confirm_html, info_msg = await self.submit_regi_info(payment_val or "")
+        info_ok, confirm_html, info_msg = await self.submit_regi_info(form_ctx)
         timeline.append(f"提交订单信息: {info_msg}")
         if not info_ok or not confirm_html:
             await self.close()
