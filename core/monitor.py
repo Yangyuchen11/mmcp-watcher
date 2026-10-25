@@ -121,28 +121,27 @@ class FC2Monitor:
             limits = httpx.Limits(max_keepalive_connections=20, max_connections=30, keepalive_expiry=60.0)
             self.client = httpx.AsyncClient(
                 headers=self.headers,
-                timeout=httpx.Timeout(10.0, connect=5.0),
+                timeout=httpx.Timeout(40.0, connect=10.0),
                 limits=limits,
-                http2=HAS_HTTP2,
+                http2=False,  # FC2 Cart CGI OpenResty server stalls/times out on HTTP/2; HTTP/1.1 is significantly faster and reliable
                 follow_redirects=True
             )
         return self.client
 
     async def fetch_page(self, url: str) -> Tuple[Optional[str], int]:
         client = await self._get_client()
-        try:
-            resp = await client.get(url)
-            return resp.text, resp.status_code
-        except Exception as e:
-            print(f"[Monitor] Network error fetching {url}: {e}")
-            # If socket broken or HTTP/2 stream terminated, reset client to ensure instant recovery
-            if self.client and not self.client.is_closed:
-                try:
-                    await self.client.aclose()
-                except Exception:
-                    pass
-            self.client = None
-            return None, 0
+        for attempt in range(2):
+            try:
+                resp = await client.get(url)
+                return resp.text, resp.status_code
+            except Exception as e:
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                    continue
+                err_msg = str(e) if str(e) else type(e).__name__
+                print(f"[Monitor] Network error fetching {url}: {err_msg}")
+                return None, 0
+        return None, 0
 
     def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
         """
@@ -361,7 +360,13 @@ class FC2Monitor:
         Scans all pages in the store in parallel, ordered by sort=5 (newest update first).
         Covers the entire product inventory (230+ items).
         """
-        tasks = [self.fetch_page(f"{self.base_url}/?sort=5&page={p}") for p in range(max_pages)]
+        sem = asyncio.Semaphore(3)
+
+        async def _fetch_with_sem(p: int):
+            async with sem:
+                return await self.fetch_page(f"{self.base_url}/?sort=5&page={p}")
+
+        tasks = [_fetch_with_sem(p) for p in range(max_pages)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_items: List[ShopItem] = []
