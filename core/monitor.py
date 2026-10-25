@@ -53,20 +53,22 @@ class ShopItem:
             return None
 
 MAINTENANCE_KEYWORDS = [
-    "只今メンテナンス中",
-    "ただいまメンテナンス中",
+    # 核心标准与变体特征词（支持模糊前缀/后缀）
+    "メンテナンス中",
     "メンテナンスを行っております",
-    "只今、メンテナンス中です",
-    "現在メンテナンス中",
-    "ショップ準備中",
     "開店準備中",
-    "只今、準備中です",
-    "一時閉店中",
-    "只今閉店中",
-    "只今休止中",
-    "改装中につき",
+    "ショップ準備中",
+    "準備中",
+    "一時閉店",
+    "閉店中",
+    "休止中",
+    "改装中",
+    "休業中",
     "カートを閉鎖",
-    "店舗改装中"
+    "カート閉鎖",
+    "店舗改装中",
+    "販売準備",
+    "商品入替中",
 ]
 
 UPCOMING_KEYWORDS = [
@@ -288,6 +290,22 @@ class FC2Monitor:
             "dl class='item'" in html_lower
         )
 
+    def has_detail_container(self, html: Optional[str]) -> bool:
+        """Checks if standard FC2 product detail containers exist in the rendered HTML"""
+        if not html:
+            return False
+        html_lower = html.lower()
+        return (
+            "id=\"itemdetail_page\"" in html_lower or
+            "id='itemdetail_page'" in html_lower or
+            "class=\"item_detail\"" in html_lower or
+            "class='item_detail'" in html_lower or
+            "name=\"item_id\"" in html_lower or
+            "name='item_id'" in html_lower or
+            "class=\"btn_submit_cart\"" in html_lower or
+            "class='btn_submit_cart'" in html_lower
+        )
+
     def parse_items_from_html(self, html: str) -> List[ShopItem]:
         soup = BeautifulSoup(html, DEFAULT_PARSER)
         items: List[ShopItem] = []
@@ -381,6 +399,9 @@ class FC2Monitor:
 
     def parse_single_item_page(self, html: str, url: str) -> Optional[ShopItem]:
         """Parses a single product detail page (/ca{cat}/{id}/) directly for zero-latency stock checks"""
+        if not self.has_detail_container(html):
+            return None
+
         soup = BeautifulSoup(html, DEFAULT_PARSER)
         item_id = ""
         category_id = None
@@ -478,8 +499,18 @@ class FC2Monitor:
         if not html:
             return None, False
 
-        # Detect store maintenance / closure page on product detail URL
+        # 1. Detect store maintenance / closure page via standard keywords and DOM
         is_maint = self.check_maintenance(html, status)
+
+        # 2. Redundancy fallback: If standard keywords were missed but the product detail container
+        # (#itemdetail_page, .item_detail, input[name='item_id']) is completely absent,
+        # check if generic closure / maintenance cues exist on the page
+        if not is_maint and status == 200 and len(html.strip()) > 30:
+            if not self.has_detail_container(html):
+                closure_cues = ["準備", "閉店", "メンテナンス", "休業", "休止", "改装", "閉鎖"]
+                if any(cue in html for cue in closure_cues):
+                    is_maint = True
+
         if is_maint:
             return None, True
 
