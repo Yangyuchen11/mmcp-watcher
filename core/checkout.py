@@ -41,6 +41,29 @@ class FC2Checkout:
             http2=False,  # HTTP/1.1 is strictly more stable for FC2 Cart CGI regi forms under heavy load
             follow_redirects=True
         )
+        self.is_warmed: bool = False
+        self.last_warmed_at: float = 0.0
+
+    async def warm_up(self, target_url: Optional[str] = None) -> bool:
+        """
+        Pre-warms the TCP and TLS 1.3 connection to the cart server by performing a fast lightweight HEAD or GET.
+        Keeps the SSL socket open and hot in the connection pool so the next POST /cart_in has 0ms handshake overhead!
+        """
+        try:
+            url = target_url or f"{self.base_url}/"
+            # Fast HEAD request to open and maintain the TLS keep-alive pipeline
+            resp = await self.client.head(url, timeout=3.5)
+            if resp.status_code in (200, 301, 302, 403, 405):
+                self.is_warmed = True
+                self.last_warmed_at = time.time()
+                return True
+            # Fallback to GET if server rejects HEAD
+            await self.client.get(url, timeout=3.5)
+            self.is_warmed = True
+            self.last_warmed_at = time.time()
+            return True
+        except Exception:
+            return False
 
     async def close(self):
         if self.client and not self.client.is_closed:

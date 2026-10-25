@@ -45,7 +45,8 @@ class BotEngine:
             "last_scan_status": "Idle",
             "is_in_maintenance": False,
             "active_workers_count": 0,
-            "upcoming_count": 0
+            "upcoming_count": 0,
+            "prewarmed_count": 0
         }
 
         # Catalog & Upcoming Items storage
@@ -63,6 +64,8 @@ class BotEngine:
         self.active_order_tasks: Dict[str, asyncio.Task] = {}       # item_id -> running Task
         self.active_orders_status: Dict[str, Dict[str, Any]] = {}   # item_id -> live status dict
         self.priority_monitor_tasks: Dict[str, asyncio.Task] = {}   # item_id -> isolated direct detail polling Task
+        self.prewarmed_checkouts: Dict[str, Dict[str, Any]] = {}    # item_id -> {"primary": FC2Checkout, "hedge": FC2Checkout}
+        self.prewarm_task: Optional[asyncio.Task] = None
         self._order_semaphore: Optional[asyncio.Semaphore] = None
         self.is_in_maintenance: bool = False
         self.auto_rush_active: bool = False
@@ -228,10 +231,11 @@ class BotEngine:
         # Async trigger full catalog sync on startup to discover all upcoming items
         asyncio.create_task(self.sync_full_catalog())
 
-        # Start dual concurrent scanning loops and daily 05:00 JST full catalog refresh
+        # Start dual concurrent scanning loops, daily 05:00 JST full refresh, and connection pre-warmer
         self.catalog_monitor_task = asyncio.create_task(self._catalog_monitor_loop())
         self.priority_monitor_task = asyncio.create_task(self._priority_monitor_loop())
         self.daily_schedule_task = asyncio.create_task(self._daily_schedule_loop())
+        self.prewarm_task = asyncio.create_task(self._prewarm_sessions_loop())
         self.monitor_task = self.catalog_monitor_task
 
     def interrupt_sleep(self):
@@ -264,6 +268,24 @@ class BotEngine:
             return
         self.is_running = False
         self.interrupt_sleep()
+
+        if self.prewarm_task and not self.prewarm_task.done():
+            self.prewarm_task.cancel()
+            try:
+                await self.prewarm_task
+            except asyncio.CancelledError:
+                pass
+        self.prewarm_task = None
+
+        for item_sessions in list(self.prewarmed_checkouts.values()):
+            for s in list(item_sessions.values()):
+                if s:
+                    try:
+                        await s.close()
+                    except Exception:
+                        pass
+        self.prewarmed_checkouts.clear()
+        self.stats["prewarmed_count"] = 0
 
         for t in list(self.priority_monitor_tasks.values()):
             if t and not t.done():
@@ -717,6 +739,109 @@ class BotEngine:
         for iid, item in targets.items():
             self.dispatch_order_worker(item, event_type="MAINTENANCE_DIRECT_FIRE")
 
+    def _pop_prewarmed_checkout(self, item_id: str, role: str = "primary") -> Optional[FC2Checkout]:
+        """Pops and returns a prewarmed checkout session if available and active"""
+        item_id = str(item_id)
+        if item_id in self.prewarmed_checkouts:
+            checkout = self.prewarmed_checkouts[item_id].pop(role, None)
+            if checkout and not checkout.client.is_closed:
+                return checkout
+        return None
+
+    async def _prewarm_sessions_loop(self):
+        """
+        Background maintenance loop that maintains pre-warmed TCP+TLS connections
+        for candidate products (upcoming or priority items).
+        Maintains 2 connections per item:
+          - 'primary': for the main order worker
+          - 'hedge': for the rolling hedged racing worker
+        Pings existing connections with lightweight HEAD every 25 seconds to keep Keep-Alive sockets alive.
+        """
+        self.log("INFO", "🔥 [双通道会话预热引擎] 已上线！为全部重点商品保持主会话与对冲会话的 TLS 常驻热连接...")
+
+        while self.is_running:
+            try:
+                # 1. Identify current candidate items
+                candidates: Dict[str, Dict[str, Any]] = {}
+                for it in self.upcoming_items.values():
+                    iid = str(it.get("item_id"))
+                    if iid not in self.purchased_item_ids and iid not in self.soldout_item_ids:
+                        candidates[iid] = it
+
+                for pid in self.priority_item_ids:
+                    pid = str(pid)
+                    if pid not in self.purchased_item_ids and pid not in self.soldout_item_ids:
+                        if pid not in candidates:
+                            candidates[pid] = {
+                                "item_id": pid,
+                                "title": f"优先监控商品-{pid}",
+                                "url": f"{self.monitor.base_url}/ca13/{pid}/"
+                            }
+
+                # 2. Clean up prewarmed sessions for items no longer candidates
+                for iid in list(self.prewarmed_checkouts.keys()):
+                    if iid not in candidates:
+                        sessions = self.prewarmed_checkouts.pop(iid, {})
+                        for s in sessions.values():
+                            if s:
+                                try:
+                                    await s.close()
+                                except Exception:
+                                    pass
+
+                # 3. Ensure both 'primary' and 'hedge' connections are active for each candidate
+                order_cfg = self.config.get("order", {})
+                dry_run = bool(order_cfg.get("dry_run", True))
+                session_retries = int(order_cfg.get("session_retries", 3))
+                session_retry_delay = float(order_cfg.get("session_retry_delay", 0.15))
+                base_url = self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
+
+                async def _ensure_warm(iid: str, cand: Dict[str, Any], role: str):
+                    if iid not in self.prewarmed_checkouts:
+                        self.prewarmed_checkouts[iid] = {}
+                    item_sessions = self.prewarmed_checkouts[iid]
+                    chk = item_sessions.get(role)
+                    needs_new = chk is None or chk.client.is_closed
+                    now = time.time()
+
+                    if needs_new:
+                        new_chk = FC2Checkout(
+                            base_url=base_url,
+                            buyer_info=self.config.get("buyer", {}),
+                            dry_run=dry_run,
+                            retry_count=session_retries,
+                            retry_delay=session_retry_delay
+                        )
+                        warmed = await new_chk.warm_up()
+                        if warmed:
+                            item_sessions[role] = new_chk
+                            role_name = "主会话" if role == "primary" else "对冲会话"
+                            title = cand.get("title", f"商品-{iid}")[:15]
+                            self.log("INFO", f"♨️ [会话预热就绪] 商品 [{title}] (ID: {iid}) {role_name} 已建立长连接 (TLS 1.3 握手完成，0ms 直发就绪)")
+                    else:
+                        if now - chk.last_warmed_at > 25.0:
+                            ok = await chk.warm_up()
+                            if not ok:
+                                await chk.close()
+                                item_sessions.pop(role, None)
+
+                warm_tasks = [
+                    _ensure_warm(iid, cand, role)
+                    for iid, cand in candidates.items()
+                    for role in ["primary", "hedge"]
+                ]
+                if warm_tasks:
+                    await asyncio.gather(*warm_tasks, return_exceptions=True)
+
+                self.stats["prewarmed_count"] = sum(len(v) for v in self.prewarmed_checkouts.values())
+
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+
+            await asyncio.sleep(5.0)
+
     def dispatch_order_worker(self, item: ShopItem, event_type: str = "IN_STOCK"):
         """
         Dispatches an independent background order worker task for this product.
@@ -791,14 +916,29 @@ class BotEngine:
             priority_str = "🚀 [并发抢购线程]"
         self.log("ORDER", f"{priority_str} 开始为商品 [{item.title}] (ID: {item_id}) 发起毫秒级并发抢购 (独立会话, 保持Cookie重试 {session_retries} 次, 整单轮数 {max_worker_retries}, 对冲竞速 {'开启' if hedge_enabled else '关闭'}, {mode_str})...")
 
-        async def _single_attempt(label: str) -> Dict[str, Any]:
-            checkout = FC2Checkout(
-                base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
-                buyer_info=self.config.get("buyer", {}),
-                dry_run=dry_run,
-                retry_count=session_retries,
-                retry_delay=session_retry_delay
-            )
+        # 0. Acquire pre-warmed checkouts if available (zero handshake latency!)
+        prewarmed_primary = self._pop_prewarmed_checkout(item_id, "primary")
+        prewarmed_hedge = self._pop_prewarmed_checkout(item_id, "hedge")
+
+        async def _single_attempt(label: str, prewarmed_checkout: Optional[FC2Checkout] = None) -> Dict[str, Any]:
+            used_prewarm = prewarmed_checkout is not None and not prewarmed_checkout.client.is_closed
+            if used_prewarm:
+                checkout = prewarmed_checkout
+                self.log("ORDER", f"♨️ [{label}] 启用已预热完成的独立 TLS 1.3 长连接通道！0ms握手耗时直接发射加购: [{item.title}] (ID: {item_id})")
+            else:
+                checkout = FC2Checkout(
+                    base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
+                    buyer_info=self.config.get("buyer", {}),
+                    dry_run=dry_run,
+                    retry_count=session_retries,
+                    retry_delay=session_retry_delay
+                )
+            # Ensure runtime config values are bound
+            checkout.dry_run = dry_run
+            checkout.retry_count = session_retries
+            checkout.retry_delay = session_retry_delay
+            checkout.buyer_info = self.config.get("buyer", {})
+
             try:
                 return await checkout.execute_checkout(
                     item_id=item_id,
@@ -828,15 +968,16 @@ class BotEngine:
                     self.active_orders_status[item_id]["status"] = f"加购/提交中 (轮次 {attempt}/{max_worker_retries})"
 
                     res: Optional[Dict[str, Any]] = None
+                    primary_checkout_arg = prewarmed_primary if attempt == 1 else None
 
                     if not hedge_enabled:
-                        res = await _single_attempt("主请求")
+                        res = await _single_attempt("主请求", primary_checkout_arg)
                     else:
                         # 🚀 滚动并发对冲机制 (Rolling Hedged Requests):
                         # 启动主请求线程；若超过 hedge_delay 秒未响应，不杀死原主线程（保持原连接排队等待），
                         # 同时启动对冲探针线程竞速。若对冲探针在 hedge_delay 秒内依然无响应（卡在排队），
                         # 自动切断该卡死的对冲探针并重启新探针！一旦任一探针或主线程成功，立即获胜并清理其他线程！
-                        t1 = asyncio.create_task(_single_attempt("主请求"))
+                        t1 = asyncio.create_task(_single_attempt("主请求", primary_checkout_arg))
                         done, pending = await asyncio.wait([t1], timeout=hedge_delay)
 
                         if t1 in done:
@@ -860,7 +1001,8 @@ class BotEngine:
 
                                 self.log("INFO", f"⚡ 启动第 {probe_idx} 轮对冲探针冲刺（主线程仍在保持排队等待）...")
                                 self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
-                                current_hedge_task = asyncio.create_task(_single_attempt(f"对冲探针#{probe_idx}"))
+                                hedge_checkout_arg = prewarmed_hedge if probe_idx == 1 else None
+                                current_hedge_task = asyncio.create_task(_single_attempt(f"对冲探针#{probe_idx}", hedge_checkout_arg))
 
                                 done2, pending2 = await asyncio.wait(
                                     [t1, current_hedge_task],

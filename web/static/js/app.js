@@ -452,6 +452,11 @@ function renderStatus(data) {
   if (badgeUpcoming) badgeUpcoming.textContent = `${upcomingCount} 款`;
   const tabUpcomingBadge = document.getElementById("tab-upcoming-count");
   if (tabUpcomingBadge) tabUpcomingBadge.textContent = upcomingCount;
+  const valUpcomingSub = document.getElementById("val-upcoming-sub");
+  if (valUpcomingSub) {
+    const prewarmed = stats.prewarmed_count || 0;
+    valUpcomingSub.textContent = prewarmed > 0 ? `♨️ 双通道预热中 (${prewarmed}条长连接)` : "独立高频优先扫描";
+  }
 
   // Active workers count metric
   const maxWorkers = data.config?.order?.max_concurrent_workers || 3;
