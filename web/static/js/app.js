@@ -926,6 +926,8 @@ async function fetchConfig() {
     if (chkHedgeEl) chkHedgeEl.checked = (order.hedge_requests !== undefined) ? !!order.hedge_requests : true;
     const hedgeDelayEl = document.getElementById("cfg-hedge-delay");
     if (hedgeDelayEl) hedgeDelayEl.value = (order.hedge_delay !== undefined) ? order.hedge_delay : 2.5;
+    const chkMaintDirectEl = document.getElementById("chk-maintenance-direct-order");
+    if (chkMaintDirectEl) chkMaintDirectEl.checked = (order.enable_maintenance_direct_order !== undefined) ? !!order.enable_maintenance_direct_order : true;
 
     // Notifications (Discord only)
     const notifs = cfg.notifications || {};
@@ -1022,6 +1024,7 @@ async function saveConfig() {
   const maxWorkersEl = document.getElementById("cfg-max-workers");
   const chkHedgeEl = document.getElementById("chk-hedge-requests");
   const hedgeDelayEl = document.getElementById("cfg-hedge-delay");
+  const chkMaintDirectEl = document.getElementById("chk-maintenance-direct-order");
 
   const payload = {
     buyer: {
@@ -1060,7 +1063,8 @@ async function saveConfig() {
       worker_retry_delay: workerRetryDelayEl ? (parseFloat(workerRetryDelayEl.value) || 0.2) : 0.2,
       max_concurrent_workers: maxWorkersEl ? (parseInt(maxWorkersEl.value, 10) || 3) : 3,
       hedge_requests: chkHedgeEl ? chkHedgeEl.checked : true,
-      hedge_delay: hedgeDelayEl ? (parseFloat(hedgeDelayEl.value) || 2.5) : 2.5
+      hedge_delay: hedgeDelayEl ? (parseFloat(hedgeDelayEl.value) || 2.5) : 2.5,
+      enable_maintenance_direct_order: chkMaintDirectEl ? chkMaintDirectEl.checked : true
     },
     notifications: {
       discord: {

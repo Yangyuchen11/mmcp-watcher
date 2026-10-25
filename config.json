@@ -27,13 +27,15 @@
     "max_orders": 1,
     "retry_count": 3,
     "retry_delay_seconds": 0.3,
-    "session_retries": 20,
-    "session_retry_delay": 0.15,
-    "worker_retries": 5,
-    "worker_retry_delay": 0.2,
-    "max_concurrent_workers": 5,
+    "session_retries": 50,
+    "session_retry_delay": 0.01,
+    "worker_retries": 50,
+    "worker_retry_delay": 0.05,
+    "max_concurrent_workers": 8,
     "hedge_requests": true,
-    "hedge_delay": 2.5
+    "hedge_delay": 2.5,
+    "enable_maintenance_direct_order": true,
+    "maintenance_direct_worker_retries": 60
   },
   "buyer": {
     "name": "山田　太郎",

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=3.3">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.5">
   <link rel="icon" type="image/x-icon" href="https://cart.fc2img.com/favicon.ico">
 </head>
 <body>
@@ -490,6 +490,18 @@
                     <input type="number" id="cfg-hedge-delay" step="0.1" min="0.1" value="2.5">
                   </div>
                 </div>
+
+                <div class="form-row">
+                  <div class="form-group" style="flex: 1 1 100%;">
+                    <label>维护结束瞬时直发加购</label>
+                    <div class="checkbox-control-box" title="开启后，在商城维护结束的瞬间，无需等待详情页加载，直接对所有预计上线与重点商品并行发起加购下单线程！页面详情监控将同步进行，并在读取到售罄或抢购成功后自动停止尝试。">
+                      <label for="chk-maintenance-direct-order">
+                        <input type="checkbox" id="chk-maintenance-direct-order" checked>
+                        <span>⚡ 维护结束瞬间直接触发加购（无视页面状态直发下单，售罄/买到即止）</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -558,6 +570,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=3.3"></script>
+  <script src="/static/js/app.js?v=3.5"></script>
 </body>
 </html>

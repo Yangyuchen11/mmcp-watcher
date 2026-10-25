@@ -33,7 +33,9 @@
     "worker_retry_delay": 0.2,
     "max_concurrent_workers": 3,
     "hedge_requests": true,
-    "hedge_delay": 2.5
+    "hedge_delay": 2.5,
+    "enable_maintenance_direct_order": true,
+    "maintenance_direct_worker_retries": 60
   },
   "buyer": {
     "name": "山田　太郎",

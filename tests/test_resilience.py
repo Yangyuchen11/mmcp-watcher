@@ -388,6 +388,98 @@ async def test_full_checkout_pipeline_dryrun():
 
 
 # =========================================================================
+# TEST 8: Maintenance Direct Order & Detail Soldout Cancellation
+# =========================================================================
+async def test_maintenance_direct_orders_and_soldout_cancellation():
+    print_header("TEST 8: 维护结束直接加购并发冲刺与详情页售罄取消 (Direct Fire & Soldout Cancellation)")
+
+    cfg_mgr = ConfigManager()
+    cfg_mgr.config["order"]["auto_buy"] = True
+    cfg_mgr.config["order"]["dry_run"] = True
+    cfg_mgr.config["order"]["max_orders"] = 1
+    cfg_mgr.config["order"]["enable_maintenance_direct_order"] = True
+    cfg_mgr.config["order"]["worker_retries"] = 10
+    cfg_mgr.config["order"]["worker_retry_delay"] = 0.05
+    cfg_mgr.config["order"]["session_retries"] = 1
+    cfg_mgr.config["order"]["session_retry_delay"] = 0.05
+    cfg_mgr.config["order"]["hedge_requests"] = False
+
+    bot = BotEngine(cfg_mgr)
+    bot.is_running = True
+
+    # Emulate background workers repeatedly retrying on busy cart
+    async def mock_busy_checkout(self, item_id, item_title, item_url=None, quantity=1):
+        await asyncio.sleep(0.05)
+        return {"success": False, "message": "加购未完成：购物车为空或尚未开放", "is_soldout": False}
+
+    import unittest.mock
+    patcher = unittest.mock.patch.object(FC2Checkout, "execute_checkout", mock_busy_checkout)
+    patcher.start()
+
+    # Register 2 upcoming items:
+    # Item 343: Will be confirmed SOLD OUT on detail page
+    # Item 344: Will be successfully purchased
+    bot.upcoming_items = {
+        "343": {
+            "item_id": "343",
+            "title": "ひなちゃん セーラー服",
+            "price": "35,000円",
+            "url": "https://mamachapptoy.cart.fc2.com/ca13/343/",
+            "is_upcoming": True,
+            "in_stock": False
+        },
+        "344": {
+            "item_id": "344",
+            "title": "ちのちゃん ロングメイド",
+            "price": "36,000円",
+            "url": "https://mamachapptoy.cart.fc2.com/ca13/344/",
+            "is_upcoming": True,
+            "in_stock": False
+        }
+    }
+
+    # 1. Trigger maintenance direct orders
+    bot.trigger_maintenance_direct_orders()
+
+    # Both items should immediately have active background order workers!
+    assert "343" in bot.active_order_tasks, "Worker for 343 should be immediately dispatched"
+    assert "344" in bot.active_order_tasks, "Worker for 344 should be immediately dispatched"
+    print_pass("维护结束瞬间: 成功为全部待抢商品 (343, 344) 无视详情状态直接派发独立并发下单线程！")
+
+    # 2. Priority Monitor checks item 343 detail page -> reports SOLD OUT (在庫切れ)
+    html_detail_soldout = """
+    <html><body>
+      <div id="itemdetail_page">
+        <h2>ひなちゃん セーラー服</h2>
+        <dd class="stock">在庫切れ</dd>
+        <span class="price">35,000円</span>
+        <input type="hidden" name="item_id" value="343">
+      </div>
+    </body></html>
+    """
+    item343 = bot.monitor.parse_single_item_page(html_detail_soldout, "https://mamachapptoy.cart.fc2.com/ca13/343/")
+    assert item343.in_stock is False and not item343.is_upcoming, "Should parse as soldout"
+
+    # Simulate priority monitor detecting soldout
+    bot.soldout_item_ids.add("343")
+    bot.cancel_order_worker("343", reason="详情页已售罄")
+
+    assert "343" in bot.soldout_item_ids, "343 should be in soldout_item_ids"
+    assert "343" not in bot.active_order_tasks, "Worker for 343 should be cancelled and cleaned up"
+    print_pass("优先检测独立并行运行: 详情页读取到售罄 (在庫切れ) 后，立刻将 ID 343 标记为售罄并安全取消正在运行的下单线程！")
+
+    # 3. Simulate Worker 344 succeeding
+    bot.purchased_item_ids.add("344")
+    bot.cancel_order_worker("344", reason="抢购成功达成限额")
+
+    assert "344" in bot.purchased_item_ids, "344 should be marked as purchased"
+    assert "344" not in bot.active_order_tasks, "Worker for 344 should be cleaned up"
+    print_pass("加购成功停止策略: 抢购成功 1 件后顺利记录入库并完成会话！")
+    patcher.stop()
+    bot.is_running = False
+
+
+# =========================================================================
 # MAIN TEST RUNNER
 # =========================================================================
 async def run_all_tests():
@@ -404,6 +496,7 @@ async def run_all_tests():
         ("购物车为空(继续)与售罄(止损)鉴别", test_cart_empty_vs_soldout_discrimination),
         ("并发对冲探针竞速与超时排队拯救", test_hedged_request_racing),
         ("完整下单链条端到端全流程模拟", test_full_checkout_pipeline_dryrun),
+        ("维护结束瞬时直发加购与售罄熔断", test_maintenance_direct_orders_and_soldout_cancellation),
     ]
 
     passed_count = 0

@@ -4,7 +4,7 @@ import datetime
 from typing import Dict, Any, List, Optional
 from collections import deque
 from .config import ConfigManager
-from .monitor import FC2Monitor, ShopItem
+from .monitor import FC2Monitor, ShopItem, SOLDOUT_KEYWORDS
 from .checkout import FC2Checkout
 from notifiers import NotificationDispatcher
 
@@ -59,6 +59,7 @@ class BotEngine:
 
         # Multi-worker Concurrency & Session Deduplication
         self.purchased_item_ids: set = set()
+        self.soldout_item_ids: set = set()                          # item_ids confirmed sold out by detail monitor or checkout
         self.active_order_tasks: Dict[str, asyncio.Task] = {}       # item_id -> running Task
         self.active_orders_status: Dict[str, Dict[str, Any]] = {}   # item_id -> live status dict
         self.priority_monitor_tasks: Dict[str, asyncio.Task] = {}   # item_id -> isolated direct detail polling Task
@@ -122,9 +123,10 @@ class BotEngine:
         """Resets purchased items memory and counters to begin a fresh session"""
         count = len(self.purchased_item_ids)
         self.purchased_item_ids.clear()
+        self.soldout_item_ids.clear()
         self.stats["total_orders_succeeded"] = 0
         self.stats["total_orders_attempted"] = 0
-        self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品，新一轮发售可重新抢购")
+        self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品与售罄状态，新一轮发售可重新抢购")
 
     async def sync_full_catalog(self) -> int:
         """Background worker that syncs the entire store catalog in sort=5 order"""
@@ -190,15 +192,23 @@ class BotEngine:
         """Returns active concurrent order worker statuses"""
         return list(self.active_orders_status.values())
 
-    def cancel_order_worker(self, item_id: str) -> bool:
-        """Manually cancels a running order worker"""
+    def _cleanup_order_task(self, item_id: str):
+        """Callback to clean up task references upon task completion or cancellation"""
+        self.active_order_tasks.pop(item_id, None)
+        self.active_orders_status.pop(item_id, None)
+        self.stats["active_workers_count"] = len(self.active_order_tasks)
+
+    def cancel_order_worker(self, item_id: str, reason: str = "用户手动取消") -> bool:
+        """Cancels a running order worker and cleans up references"""
         item_id = str(item_id).strip()
         task = self.active_order_tasks.get(item_id)
         if task and not task.done():
             task.cancel()
-            self.active_order_tasks.pop(item_id, None)
-            self.active_orders_status.pop(item_id, None)
-            self.log("WARN", f"🛑 用户已手动取消商品 ID {item_id} 的并发抢购线程")
+            self._cleanup_order_task(item_id)
+            self.log("WARN", f"🛑 [{reason}] 已终止商品 ID {item_id} 的并发抢购线程")
+            return True
+        elif item_id in self.active_order_tasks:
+            self._cleanup_order_task(item_id)
             return True
         return False
 
@@ -335,15 +345,15 @@ class BotEngine:
             for iid in done_ids:
                 self.priority_monitor_tasks.pop(iid, None)
 
-            # Determine candidates: upcoming items or manually prioritized items that have NOT been bought yet
+            # Determine candidates: upcoming items or manually prioritized items that have NOT been bought yet and NOT confirmed sold out
             candidates: Dict[str, Dict[str, Any]] = {}
             for it in self.upcoming_items.values():
                 iid = str(it.get("item_id"))
-                if iid not in self.purchased_item_ids and iid not in self.active_order_tasks:
+                if iid not in self.purchased_item_ids and iid not in self.soldout_item_ids:
                     candidates[iid] = it
 
             for pid in self.priority_item_ids:
-                if pid not in self.purchased_item_ids and pid not in self.active_order_tasks:
+                if pid not in self.purchased_item_ids and pid not in self.soldout_item_ids:
                     if pid not in candidates:
                         candidates[pid] = {
                             "item_id": pid,
@@ -360,7 +370,7 @@ class BotEngine:
                     )
                     self.priority_monitor_tasks[iid] = task
 
-            # Cancel tasks for any items that are no longer candidates (e.g. bought or cancelled)
+            # Cancel tasks for any items that are no longer candidates (e.g. bought, sold out, or cancelled)
             for iid, task in list(self.priority_monitor_tasks.items()):
                 if iid not in candidates and not task.done():
                     task.cancel()
@@ -373,6 +383,7 @@ class BotEngine:
         Dedicated independent monitor loop for a SINGLE priority item.
         Polls the product's direct detail page (/ca13/{id}/) without going through the catalog.
         Network hangs or errors on this item NEVER affect any other product!
+        Runs concurrently alongside independent order workers until bought or sold out.
         """
         item_id = str(item_dict.get("item_id"))
         title = item_dict.get("title", f"商品-{item_id}")
@@ -381,7 +392,7 @@ class BotEngine:
         self.log("INFO", f"🎯 [专属独立监控就绪] 商品 [{title}] (ID: {item_id}) 独立极速监控协程已上线，直连专属详情页探测！")
 
         while self.is_running:
-            if item_id in self.purchased_item_ids or item_id in self.active_order_tasks:
+            if item_id in self.purchased_item_ids or item_id in self.soldout_item_ids:
                 break
 
             shop_cfg = self.config.get("shop", {})
@@ -408,15 +419,35 @@ class BotEngine:
 
                     if target_item.in_stock:
                         # 🔥 THE MOMENT THIS DOLL BECOMES IN STOCK!
-                        self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
-                        self.upcoming_items.pop(item_id, None)
-                        self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
-                        break
+                        # Dispatch order worker if not already running or succeeded
+                        if item_id not in self.purchased_item_ids and (item_id not in self.active_order_tasks or self.active_order_tasks[item_id].done()):
+                            self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
+                            self.upcoming_items.pop(item_id, None)
+                            self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
+
+                            # 🛡️ 交叉前哨联动：若大盘此前被标记为维护中，此处单品详情页有货为开门铁证！
+                            # 立即唤醒大盘解除维护并触发其余重点商品的直接加购冲刺
+                            if self.is_in_maintenance:
+                                self.is_in_maintenance = False
+                                self.auto_rush_active = True
+                                auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
+                                self.auto_rush_start_time = time.time()
+                                self.auto_rush_end_time = time.time() + auto_rush_dur
+                                self.log("SUCCESS", f"⚡ 【前哨交叉引爆】优先商品 (ID: {item_id}) 率先检测到有货，已同步解除维护状态并触发全体直接加购！")
+                                if self.config.get("order", {}).get("enable_maintenance_direct_order", True):
+                                    self.trigger_maintenance_direct_orders()
                     elif target_item.is_upcoming:
                         self.upcoming_items[item_id] = target_item.to_dict()
                     else:
                         # Status is neither upcoming nor in stock (e.g. sold out or temp closed)
-                        pass
+                        # Check if confirmed sold out to immediately cancel order attempts and detail polling
+                        is_soldout_detail = any(kw in target_item.stock_text for kw in SOLDOUT_KEYWORDS) or not target_item.in_stock
+                        if is_soldout_detail:
+                            self.soldout_item_ids.add(item_id)
+                            self.upcoming_items.pop(item_id, None)
+                            self.log("WARN", f"❌ [专属详情监控] 商品 [{target_item.title}] (ID: {item_id}) 详情页已确认为售罄 ({target_item.stock_text})！")
+                            self.cancel_order_worker(item_id, reason="详情页已售罄")
+                            break
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -497,12 +528,17 @@ class BotEngine:
                         self.auto_rush_start_time = time.time()
                         self.auto_rush_end_time = time.time() + auto_rush_dur
                         self.auto_rush_has_scanned_after_open = False
-                        self.log("SUCCESS", f"⚡ 【维护结束！新品开售！】商城已恢复访问！自动极速抢购突击已启动（预设持续 {int(auto_rush_dur)}s，或扫描商品全部售罄后提前退出）！")
+                        self.log("SUCCESS", f"⚡ 【维护结束！新品开售！】商城已恢复访问！自动极速抢购突击已启动（预设持续 {int(auto_rush_dur)}s）！")
                         await self.dispatcher.broadcast(
                             title="⚡ 【维护结束！新品开售！】Mamachapp 商城已开售！",
                             content=f"店铺维护已完成，商城已重新开放！机器人正在以极速突击轮询（预设持续 {int(auto_rush_dur)}s）执行全量库存扫描与抢购！",
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
+
+                        # 🔥 维护结束瞬间：直接触发无视页面状态的加购下单线程 (1商品对应1线程)
+                        if self.config.get("order", {}).get("enable_maintenance_direct_order", True):
+                            self.trigger_maintenance_direct_orders()
+
                         triggers = self.monitor.check_matches(
                             items,
                             target_keywords=target_keywords,
@@ -620,6 +656,67 @@ class BotEngine:
         if is_instock_event:
             self.dispatch_order_worker(item, event_type=event_type)
 
+    def trigger_maintenance_direct_orders(self):
+        """
+        Immediately dispatches independent order workers for all upcoming & priority items
+        the very millisecond maintenance ends, completely bypassing detail page checks!
+        Workers fire POST /cart_in directly and retry aggressively until purchased or sold out.
+        """
+        order_cfg = self.config.get("order", {})
+        if not order_cfg.get("auto_buy", True):
+            self.log("INFO", "ℹ️ 自动购买开关为关闭状态，维护结束跳过直接加购触发")
+            return
+
+        max_orders = order_cfg.get("max_orders", 1)
+        if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+            self.log("INFO", f"已达成最大购买目标 ({len(self.purchased_item_ids)}/{max_orders} 款)，维护结束跳过直接加购")
+            return
+
+        # Collect candidate items:
+        # All items currently in upcoming_items or pinned in priority_item_ids
+        targets: Dict[str, ShopItem] = {}
+
+        # 1. Known upcoming items
+        for iid, it_dict in list(self.upcoming_items.items()):
+            iid = str(iid)
+            if iid not in self.purchased_item_ids and iid not in self.soldout_item_ids:
+                targets[iid] = ShopItem(
+                    item_id=iid,
+                    title=it_dict.get("title", f"商品-{iid}"),
+                    price=it_dict.get("price", "N/A"),
+                    url=it_dict.get("url") or f"{self.monitor.base_url}/ca13/{iid}/",
+                    image_url=it_dict.get("image_url", ""),
+                    in_stock=True,
+                    stock_text=it_dict.get("stock_text", "维护结束直发冲刺"),
+                    category_id=it_dict.get("category_id")
+                )
+
+        # 2. Pinned priority items not already in upcoming_items
+        for pid in list(self.priority_item_ids):
+            pid = str(pid)
+            if pid not in targets and pid not in self.purchased_item_ids and pid not in self.soldout_item_ids:
+                targets[pid] = ShopItem(
+                    item_id=pid,
+                    title=f"重点优先商品-{pid}",
+                    price="N/A",
+                    url=f"{self.monitor.base_url}/ca13/{pid}/",
+                    image_url="",
+                    in_stock=True,
+                    stock_text="重点优先直发冲刺",
+                    category_id="13"
+                )
+
+        if not targets:
+            self.log("INFO", "ℹ️ 维护结束：当前无待抢的预计上线或重点优先商品，无需直接加购")
+            return
+
+        target_ids = list(targets.keys())
+        target_names = [it.title[:15] for it in targets.values()]
+        self.log("ORDER", f"🚀 ⚡ 【维护结束瞬间直接加购触发】已为 {len(targets)} 款重点商品 (IDs: {target_ids}, 名称: {target_names}) 无视页面状态立即启动独立下单抢购线程！")
+
+        for iid, item in targets.items():
+            self.dispatch_order_worker(item, event_type="MAINTENANCE_DIRECT_FIRE")
+
     def dispatch_order_worker(self, item: ShopItem, event_type: str = "IN_STOCK"):
         """
         Dispatches an independent background order worker task for this product.
@@ -650,6 +747,7 @@ class BotEngine:
 
         # 4. Launch dedicated background task!
         task = asyncio.create_task(self._run_order_worker(item, event_type))
+        task.add_done_callback(lambda t: self._cleanup_order_task(item_id))
         self.active_order_tasks[item_id] = task
         self.stats["active_workers_count"] = len(self.active_order_tasks)
 
@@ -664,6 +762,9 @@ class BotEngine:
         session_retries = int(order_cfg.get("session_retries", 3))
         session_retry_delay = float(order_cfg.get("session_retry_delay", 0.15))
         max_worker_retries = int(order_cfg.get("worker_retries", 5))
+        if event_type == "MAINTENANCE_DIRECT_FIRE":
+            # For direct maintenance fire, allow continuous aggressive attempts until sold out or bought
+            max_worker_retries = int(order_cfg.get("maintenance_direct_worker_retries", 60))
         retry_delay = float(order_cfg.get("worker_retry_delay", 0.2))
         quantity = int(order_cfg.get("quantity", 1))
         dry_run = bool(order_cfg.get("dry_run", True))
@@ -671,17 +772,23 @@ class BotEngine:
         hedge_delay = float(order_cfg.get("hedge_delay", 2.5))
 
         self.stats["total_orders_attempted"] += 1
+        initial_status = "⚡ 维护结束直发加购中..." if event_type == "MAINTENANCE_DIRECT_FIRE" else "正在连接结算会话..."
         self.active_orders_status[item_id] = {
             "item_id": item_id,
             "title": item.title,
-            "status": "正在连接结算会话...",
+            "status": initial_status,
             "attempt": 1,
             "max_retries": max_worker_retries,
             "start_time": now_jst().strftime("%H:%M:%S")
         }
 
         mode_str = "🛡️ [模拟]" if dry_run else "⚠️ [实盘]"
-        priority_str = "⚡ [预计上线优先抢购]" if event_type == "UPCOMING_DROPPED" else "🚀 [并发抢购线程]"
+        if event_type == "MAINTENANCE_DIRECT_FIRE":
+            priority_str = "⚡ [维护结束瞬间直接加购]"
+        elif event_type == "UPCOMING_DROPPED":
+            priority_str = "⚡ [预计上线优先抢购]"
+        else:
+            priority_str = "🚀 [并发抢购线程]"
         self.log("ORDER", f"{priority_str} 开始为商品 [{item.title}] (ID: {item_id}) 发起毫秒级并发抢购 (独立会话, 保持Cookie重试 {session_retries} 次, 整单轮数 {max_worker_retries}, 对冲竞速 {'开启' if hedge_enabled else '关闭'}, {mode_str})...")
 
         async def _single_attempt(label: str) -> Dict[str, Any]:
@@ -702,10 +809,21 @@ class BotEngine:
             finally:
                 await checkout.close()
 
-        sem = self._get_semaphore()
-        async with sem:
-            try:
+        try:
+            sem = self._get_semaphore()
+            async with sem:
                 for attempt in range(1, max_worker_retries + 1):
+                    # Check if detail page reported sold out
+                    if item_id in self.soldout_item_ids:
+                        self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 页面详情已确认为售罄 (在庫切れ/完売)，下单线程立即终止尝试")
+                        return
+
+                    # Check overall quota
+                    max_orders = order_cfg.get("max_orders", 1)
+                    if max_orders > 0 and len(self.purchased_item_ids) >= max_orders and item_id not in self.purchased_item_ids:
+                        self.log("INFO", f"⏹️ 已达到设定的购买目标数 ({len(self.purchased_item_ids)}/{max_orders} 款)，本线程停止对 [{item.title}] 的加购")
+                        return
+
                     self.active_orders_status[item_id]["attempt"] = attempt
                     self.active_orders_status[item_id]["status"] = f"加购/提交中 (轮次 {attempt}/{max_worker_retries})"
 
@@ -821,7 +939,10 @@ class BotEngine:
 
                         max_orders = order_cfg.get("max_orders", 1)
                         if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
-                            self.log("SUCCESS", f"🎉 已成功抢齐全部预期款式 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止监控！")
+                            self.log("SUCCESS", f"🎉 已成功抢齐全部预期款式 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止其余下单线程与监控！")
+                            for other_id, other_task in list(self.active_order_tasks.items()):
+                                if other_id != item_id and not other_task.done():
+                                    other_task.cancel()
                             await self.stop()
                         else:
                             remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
@@ -833,10 +954,12 @@ class BotEngine:
                     is_soldout = res.get("is_soldout", False)
                     if not is_soldout:
                         msg = res.get("message", "")
-                        if any(k in msg for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"]):
+                        if any(k in msg for k in SOLDOUT_KEYWORDS):
                             is_soldout = True
 
                     if is_soldout:
+                        self.soldout_item_ids.add(item_id)
+                        self.upcoming_items.pop(item_id, None)
                         self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 已确认售罄 (在庫切れ)，并发下单线程停止抢购")
                         self.order_history.insert(0, res)
                         return
@@ -849,12 +972,15 @@ class BotEngine:
                         self.log("ERROR", f"❌ 商品 [{item.title}] (ID: {item_id}) 已达最大并发重试次数 ({max_worker_retries} 次)，最终未完成")
                         self.order_history.insert(0, res)
 
-            except Exception as e:
-                self.log("ERROR", f"并发下单线程发生异常 [{item.title}]: {e}")
-            finally:
-                self.active_order_tasks.pop(item_id, None)
-                self.active_orders_status.pop(item_id, None)
-                self.stats["active_workers_count"] = len(self.active_order_tasks)
+        except asyncio.CancelledError:
+            self.log("INFO", f"⏹️ 商品 [{item.title}] (ID: {item_id}) 抢购线程已停止 (原因: 详情页检测到售罄或任务被取消)")
+            raise
+        except Exception as e:
+            self.log("ERROR", f"并发下单线程发生异常 [{item.title}]: {e}")
+        finally:
+            self.active_order_tasks.pop(item_id, None)
+            self.active_orders_status.pop(item_id, None)
+            self.stats["active_workers_count"] = len(self.active_order_tasks)
 
     # =========================================================================
     # MANUAL TEST CHECKOUT

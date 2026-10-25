@@ -38,7 +38,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "worker_retry_delay": 0.2,  # 跨会话重试等待间隔 (秒)
         "max_concurrent_workers": 3, # Maximum concurrent order threads
         "hedge_requests": True,     # 响应超时开启并发对冲竞速重试
-        "hedge_delay": 2.5          # 对冲重试启动等待阈值 (秒)
+        "hedge_delay": 2.5,         # 对冲重试启动等待阈值 (秒)
+        "enable_maintenance_direct_order": True, # 维护结束瞬间直接对重点监控商品触发加购下单
+        "maintenance_direct_worker_retries": 60  # 维护结束直接加购最大尝试轮数 (持续尝试直至售罄或买到)
     },
     "buyer": {
         "name": "山田　太郎",
