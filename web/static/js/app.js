@@ -115,15 +115,6 @@ function initEventHandlers() {
     });
   }
 
-  // Click on Upcoming Metrics Card -> Jump to Catalog tab and filter to Upcoming
-  const cardUpcoming = document.getElementById("card-metric-upcoming");
-  if (cardUpcoming) {
-    cardUpcoming.addEventListener("click", () => {
-      switchToTab("tab-catalog");
-      const btnUpcomingPill = document.querySelector('.stock-pill[data-stock="upcoming"]');
-      if (btnUpcomingPill) btnUpcomingPill.click();
-    });
-  }
 
   // Test Notification
   document.getElementById("btn-test-notify").addEventListener("click", async () => {
