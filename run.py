@@ -25,7 +25,7 @@ def main():
     print(f"==================================================")
 
     app = create_app(config_path)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 if __name__ == "__main__":
     main()
