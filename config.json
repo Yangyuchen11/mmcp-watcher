@@ -2,21 +2,25 @@
   "shop": {
     "base_url": "https://mamachapptoy.cart.fc2.com",
     "monitor_url": "https://mamachapptoy.cart.fc2.com/?sort=5",
-    "interval_seconds": 45.0,
+    "interval_seconds": 45,
     "rush_interval_seconds": 0.8,
-    "priority_interval_seconds": 10.0,
+    "priority_interval_seconds": 10,
     "rush_mode": false,
     "target_keywords": [
       "ロングメイド",
-      "ひなちゃん",
-      "ひよちゃん",
+      "ひな",
+      "ひよ",
       "ちぃち",
       "なぁな"
     ],
     "exclude_keywords": [],
     "min_price": 0,
     "max_price": 0,
-    "scan_pages": 2
+    "scan_pages": 2,
+    "priority_rush_interval_seconds": 0.3,
+    "priority_timeout_seconds": 4,
+    "priority_hedge_enabled": true,
+    "priority_hedge_delay": 1.5
   },
   "order": {
     "auto_buy": true,
@@ -25,7 +29,7 @@
     "max_orders": 1,
     "retry_count": 3,
     "retry_delay_seconds": 0.3,
-    "session_retries": 3,
+    "session_retries": 20,
     "session_retry_delay": 0.15,
     "worker_retries": 5,
     "worker_retry_delay": 0.2,

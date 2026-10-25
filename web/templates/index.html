@@ -397,24 +397,59 @@
                   </div>
                 </div>
 
-                <div class="form-row-3">
+                <div class="form-row">
                   <div class="form-group">
-                    <label for="cfg-interval" title="常态监控时的页面轮询扫描间隔">日常巡检间隔 (秒)</label>
+                    <label for="cfg-interval" title="货架大盘常态监控时的页面轮询扫描间隔">货架日常巡检间隔 (秒)</label>
                     <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
                   </div>
                   <div class="form-group">
-                    <label for="cfg-rush-interval" title="极速突击模式下的页面轮询间隔">极速巡检间隔 (秒)</label>
+                    <label for="cfg-rush-interval" title="极速突击模式下的货架页面轮询间隔">货架极速巡检间隔 (秒)</label>
                     <input type="number" id="cfg-rush-interval" step="0.1" min="0.3" value="0.8">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-priority-interval" title="预计上线商品独立优先扫描间隔时间（秒，建议0.3~0.5秒）">预计上线优先间隔 (秒)</label>
-                    <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" max="5.0" value="0.5">
                   </div>
                 </div>
 
                 <div class="form-group">
                   <label for="cfg-scan-pages" title="每次轮询扫描前N页（每页20件，默认前2页=40件最新修改商品，并发秒级拉取）">轮询扫描深度 (每次扫描前 N 页)</label>
                   <input type="number" id="cfg-scan-pages" min="1" max="6" value="2">
+                </div>
+
+                <!-- 优先商品直连详情页专属检测设置 (子板块) -->
+                <div class="sub-config-block" style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed rgba(255, 255, 255, 0.1);">
+                  <div class="block-title-row" style="margin-bottom: 8px;">
+                    <span class="config-block-badge" style="background: rgba(147, 51, 234, 0.15); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.3);">🎯 优先检测</span>
+                    <h6 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">优先商品独立详情页检测设置</h6>
+                  </div>
+                  <p class="config-block-desc" style="font-size: 0.72rem; margin-bottom: 12px; color: var(--text-secondary);">
+                    针对已锁定的预计上线娃娃，各自启动完全独立的协程直连探测详情页，互不阻塞
+                  </p>
+
+                  <div class="form-row-3">
+                    <div class="form-group">
+                      <label for="cfg-priority-interval" title="常态下每个优先商品独立详情页的检测间隔（建议 0.3~0.5秒）">优先常态间隔 (秒)</label>
+                      <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" max="5.0" value="0.5">
+                    </div>
+                    <div class="form-group">
+                      <label for="cfg-priority-rush-interval" title="极速模式下每个优先商品独立详情页的检测间隔（建议 0.2~0.5秒，完全由您自主设定）">优先极速间隔 (秒)</label>
+                      <input type="number" id="cfg-priority-rush-interval" step="0.1" min="0.1" max="5.0" value="0.3">
+                    </div>
+                    <div class="form-group">
+                      <label for="cfg-priority-timeout" title="单品独立详情页单次网络请求超时上限（超出自动切断并重试，防止单品因服务器排队挂死）">单品超时防护 (秒)</label>
+                      <input type="number" id="cfg-priority-timeout" step="0.5" min="1.0" max="15.0" value="4.0">
+                    </div>
+                  </div>
+
+                  <div class="form-row">
+                    <div class="form-group" style="justify-content: flex-end; padding-bottom: 4px;">
+                      <label class="switch-label" style="font-size: 0.78rem;" title="开启后，若单品详情页探测超过设定秒数未响应，并发启动对冲探测探针双向竞速，最快抓取开售状态！">
+                        <input type="checkbox" id="chk-priority-hedge" checked>
+                        <span>详情页对冲竞速读取</span>
+                      </label>
+                    </div>
+                    <div class="form-group">
+                      <label for="cfg-priority-hedge-delay" title="发送详情页探测请求后超过多少秒未响应则启动并发对冲探针（建议 1.0~2.0 秒）">详情页对冲阈值 (秒)</label>
+                      <input type="number" id="cfg-priority-hedge-delay" step="0.2" min="0.5" max="5.0" value="1.5">
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -548,6 +583,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=2.1"></script>
+  <script src="/static/js/app.js?v=2.2"></script>
 </body>
 </html>

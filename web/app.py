@@ -127,12 +127,14 @@ def create_app(config_path: str = "config.json") -> FastAPI:
         interval = payload.get("interval_seconds")
         rush_interval = payload.get("rush_interval_seconds")
         priority_interval = payload.get("priority_interval_seconds")
-        bot.update_intervals(interval, rush_interval, priority_interval)
+        priority_rush_interval = payload.get("priority_rush_interval_seconds")
+        bot.update_intervals(interval, rush_interval, priority_interval, priority_rush_interval)
         return {
             "success": True,
             "interval_seconds": bot.config.get("shop", {}).get("interval_seconds", 3.0),
             "rush_interval_seconds": bot.config.get("shop", {}).get("rush_interval_seconds", 0.8),
-            "priority_interval_seconds": bot.config.get("shop", {}).get("priority_interval_seconds", 0.5)
+            "priority_interval_seconds": bot.config.get("shop", {}).get("priority_interval_seconds", 0.5),
+            "priority_rush_interval_seconds": bot.config.get("shop", {}).get("priority_rush_interval_seconds", 0.3)
         }
 
     @app.post("/api/toggle-dry-run")

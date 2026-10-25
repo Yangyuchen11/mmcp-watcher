@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Tokyo \
     PORT=8081 \
     HOST=0.0.0.0 \
     CONFIG_PATH=/app/data/config.json

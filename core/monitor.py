@@ -128,20 +128,77 @@ class FC2Monitor:
             )
         return self.client
 
-    async def fetch_page(self, url: str) -> Tuple[Optional[str], int]:
+    async def fetch_page(self, url: str, timeout: Optional[float] = None) -> Tuple[Optional[str], int]:
         client = await self._get_client()
+        req_timeout = httpx.Timeout(timeout, connect=min(5.0, timeout if timeout else 5.0)) if timeout else None
         for attempt in range(2):
             try:
-                resp = await client.get(url)
+                resp = await client.get(url, timeout=req_timeout)
                 return resp.text, resp.status_code
             except Exception as e:
                 if attempt == 0:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
                     continue
                 err_msg = str(e) if str(e) else type(e).__name__
                 print(f"[Monitor] Network error fetching {url}: {err_msg}")
                 return None, 0
         return None, 0
+
+    async def fetch_page_hedged(
+        self,
+        url: str,
+        timeout: float = 4.0,
+        hedge_delay: float = 1.5,
+        enable_hedge: bool = True
+    ) -> Tuple[Optional[str], int]:
+        """
+        Hedged Request for Page Fetching (Jeffrey Dean - Tail at Scale):
+        Sends an initial GET request. If no response arrives within hedge_delay, fires a concurrent
+        hedge probe to bypass slow TCP/FastCGI worker queues! Whichever finishes first with HTTP 200 wins.
+        """
+        if not enable_hedge or hedge_delay <= 0 or hedge_delay >= timeout:
+            return await self.fetch_page(url, timeout=timeout)
+
+        t1 = asyncio.create_task(self.fetch_page(url, timeout=timeout))
+        try:
+            done, _ = await asyncio.wait([t1], timeout=hedge_delay)
+            if t1 in done:
+                res = t1.result()
+                if res and res[1] == 200:
+                    return res
+        except Exception:
+            pass
+
+        # Hedge probe: start second concurrent request for the same URL
+        t2 = asyncio.create_task(self.fetch_page(url, timeout=timeout))
+
+        # Race t1 and t2
+        done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+        for completed_task in done:
+            try:
+                res = completed_task.result()
+                if res and res[1] == 200:
+                    for p in pending:
+                        p.cancel()
+                    return res
+            except Exception:
+                pass
+
+        if pending:
+            rem_timeout = max(0.1, timeout - hedge_delay)
+            done_pending, _ = await asyncio.wait(pending, timeout=rem_timeout)
+            for pt in done_pending:
+                try:
+                    res = pt.result()
+                    if res and res[1] == 200:
+                        return res
+                except Exception:
+                    pass
+
+        try:
+            return t1.result()
+        except Exception:
+            return None, 0
 
     def check_maintenance(self, html: Optional[str], status_code: int) -> bool:
         """
@@ -348,9 +405,24 @@ class FC2Monitor:
             scheduled_time=scheduled_time
         )
 
-    async def check_item_detail(self, item_url: str) -> Optional[ShopItem]:
-        """Fetches and checks a single product detail page directly"""
-        html, status = await self.fetch_page(item_url)
+    async def check_item_detail(
+        self,
+        item_url: str,
+        timeout: Optional[float] = None,
+        hedge_delay: Optional[float] = None,
+        enable_hedge: bool = False
+    ) -> Optional[ShopItem]:
+        """Fetches and checks a single product detail page directly, with optional hedged requests"""
+        if enable_hedge and hedge_delay is not None:
+            html, status = await self.fetch_page_hedged(
+                item_url,
+                timeout=timeout or 4.0,
+                hedge_delay=hedge_delay,
+                enable_hedge=True
+            )
+        else:
+            html, status = await self.fetch_page(item_url, timeout=timeout)
+
         if not html or status != 200:
             return None
         return self.parse_single_item_page(html, item_url)
@@ -417,7 +489,20 @@ class FC2Monitor:
             # 2. Target keywords check
             matches_target = True
             if target_keywords:
-                matches_target = any(kw.lower() in title_lower for kw in target_keywords if kw)
+                def _kw_check(kw: str) -> bool:
+                    kw_clean = kw.strip().lower()
+                    if not kw_clean:
+                        return False
+                    if kw_clean in title_lower:
+                        return True
+                    # Smart doll name matching: allow matching 'ひな' when keyword is 'ひなちゃん'
+                    if kw_clean.endswith("ちゃん") and len(kw_clean) > 3:
+                        base_name = kw_clean[:-3].strip()
+                        if base_name in title_lower:
+                            return True
+                    return False
+
+                matches_target = any(_kw_check(kw) for kw in target_keywords)
 
             if not matches_target:
                 continue

@@ -8,6 +8,16 @@ from .monitor import FC2Monitor, ShopItem
 from .checkout import FC2Checkout
 from notifiers import NotificationDispatcher
 
+try:
+    from zoneinfo import ZoneInfo
+    JST = ZoneInfo("Asia/Tokyo")
+except Exception:
+    JST = datetime.timezone(datetime.timedelta(hours=9))
+
+def now_jst() -> datetime.datetime:
+    """Returns current datetime in Japan Standard Time (JST, UTC+9)"""
+    return datetime.datetime.now(JST)
+
 class BotEngine:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
@@ -50,6 +60,7 @@ class BotEngine:
         self.purchased_item_ids: set = set()
         self.active_order_tasks: Dict[str, asyncio.Task] = {}       # item_id -> running Task
         self.active_orders_status: Dict[str, Dict[str, Any]] = {}   # item_id -> live status dict
+        self.priority_monitor_tasks: Dict[str, asyncio.Task] = {}   # item_id -> isolated direct detail polling Task
         self._order_semaphore: Optional[asyncio.Semaphore] = None
         self.is_in_maintenance: bool = False
         self._wake_event_catalog: Optional[asyncio.Event] = None
@@ -66,7 +77,7 @@ class BotEngine:
         return self._order_semaphore
 
     def log(self, level: str, message: str):
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = now_jst().strftime("%Y-%m-%d %H:%M:%S")
         entry = {
             "timestamp": now_str,
             "level": level.upper(),
@@ -196,7 +207,7 @@ class BotEngine:
             self.reset_session()
 
         self.is_running = True
-        self.stats["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.stats["start_time"] = now_jst().strftime("%Y-%m-%d %H:%M:%S")
         self.log("INFO", "🚀 监控机器人已启动！双线程架构运行中：[线程1] 预计上线商品优先毫秒级扫描 | [线程2] 全量货架常态巡检")
         
         # Async trigger full catalog sync on startup to discover all upcoming items
@@ -238,6 +249,11 @@ class BotEngine:
         self.is_running = False
         self.interrupt_sleep()
 
+        for t in list(self.priority_monitor_tasks.values()):
+            if t and not t.done():
+                t.cancel()
+        self.priority_monitor_tasks.clear()
+
         for t in [self.catalog_monitor_task, self.priority_monitor_task]:
             if t:
                 t.cancel()
@@ -269,7 +285,7 @@ class BotEngine:
         self.log("WARN", f"🛡️ 模拟模式状态: {status_text}")
         return dry
 
-    def update_intervals(self, interval: Optional[float] = None, rush_interval: Optional[float] = None, priority_interval: Optional[float] = None):
+    def update_intervals(self, interval: Optional[float] = None, rush_interval: Optional[float] = None, priority_interval: Optional[float] = None, priority_rush_interval: Optional[float] = None):
         if "shop" not in self.config:
             self.config["shop"] = {}
         if interval is not None:
@@ -287,88 +303,123 @@ class BotEngine:
                 self.config["shop"]["priority_interval_seconds"] = max(0.1, round(float(priority_interval), 2))
             except Exception:
                 pass
+        if priority_rush_interval is not None:
+            try:
+                self.config["shop"]["priority_rush_interval_seconds"] = max(0.1, round(float(priority_rush_interval), 2))
+            except Exception:
+                pass
         self.config_manager.save()
         self.interrupt_sleep()
-        self.log("INFO", f"⏱️ 巡检间隔已更新: 日常={self.config['shop'].get('interval_seconds', 3.0)}s, 极速={self.config['shop'].get('rush_interval_seconds', 0.8)}s, 预计上线优先={self.config['shop'].get('priority_interval_seconds', 0.5)}s")
+        self.log("INFO", f"⏱️ 巡检间隔已更新: 货架日常={self.config['shop'].get('interval_seconds', 3.0)}s, 货架极速={self.config['shop'].get('rush_interval_seconds', 0.8)}s, 优先常态={self.config['shop'].get('priority_interval_seconds', 0.5)}s, 优先极速={self.config['shop'].get('priority_rush_interval_seconds', 0.3)}s")
 
     # =========================================================================
-    # THREAD 1: Priority Scanner Loop for Upcoming Items (预计上线商品优先扫描)
+    # THREAD 1: Priority Scanner Supervisor & Dedicated Per-Product Loops
     # =========================================================================
     async def _priority_monitor_loop(self):
         """
-        Dedicated high-priority scanner task.
-        Continually monitors upcoming items (X月X日開始予定) and priority items.
-        The instant an item opens for sale (in_stock=True), it immediately dispatches
-        an independent order worker without holding or blocking any scanning threads!
+        Supervisor task for priority/upcoming items.
+        Spawns and maintains an ISOLATED, INDEPENDENT polling task for EACH priority item's
+        direct product detail page. If one item hangs or hits a network error, other items
+        continue polling at millisecond speed without any head-of-line blocking!
         """
         while self.is_running:
-            shop_cfg = self.config.get("shop", {})
-            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance
-            interval = shop_cfg.get("priority_interval_seconds", 0.5) if not rush_mode else 0.3
+            # Clean up finished/cancelled priority tasks
+            done_ids = [iid for iid, t in self.priority_monitor_tasks.items() if t.done()]
+            for iid in done_ids:
+                self.priority_monitor_tasks.pop(iid, None)
 
             # Determine candidates: upcoming items or manually prioritized items that have NOT been bought yet
-            candidates: List[Dict[str, Any]] = [
-                it for it in self.upcoming_items.values()
-                if it.get("item_id") not in self.purchased_item_ids
-                and it.get("item_id") not in self.active_order_tasks
-            ]
+            candidates: Dict[str, Dict[str, Any]] = {}
+            for it in self.upcoming_items.values():
+                iid = str(it.get("item_id"))
+                if iid not in self.purchased_item_ids and iid not in self.active_order_tasks:
+                    candidates[iid] = it
 
-            # Also include any priority pinned item IDs that aren't already in upcoming_items
             for pid in self.priority_item_ids:
                 if pid not in self.purchased_item_ids and pid not in self.active_order_tasks:
-                    if pid not in self.upcoming_items:
-                        candidates.append({
+                    if pid not in candidates:
+                        candidates[pid] = {
                             "item_id": pid,
                             "title": f"优先监控商品-{pid}",
                             "url": f"{self.monitor.base_url}/ca13/{pid}/"
-                        })
+                        }
 
-            if not candidates:
-                # No upcoming items currently tracked, idle with moderate sleep
-                await self._sleep_interruptible_priority(2.0)
-                continue
+            # Spawn independent monitor task for any candidate not yet running
+            for iid, cand in candidates.items():
+                if iid not in self.priority_monitor_tasks:
+                    task = asyncio.create_task(
+                        self._monitor_single_priority_item(cand),
+                        name=f"PriorityScan-{iid}"
+                    )
+                    self.priority_monitor_tasks[iid] = task
+
+            # Cancel tasks for any items that are no longer candidates (e.g. bought or cancelled)
+            for iid, task in list(self.priority_monitor_tasks.items()):
+                if iid not in candidates and not task.done():
+                    task.cancel()
+                    self.priority_monitor_tasks.pop(iid, None)
+
+            await self._sleep_interruptible_priority(1.0)
+
+    async def _monitor_single_priority_item(self, item_dict: Dict[str, Any]):
+        """
+        Dedicated independent monitor loop for a SINGLE priority item.
+        Polls the product's direct detail page (/ca13/{id}/) without going through the catalog.
+        Network hangs or errors on this item NEVER affect any other product!
+        """
+        item_id = str(item_dict.get("item_id"))
+        title = item_dict.get("title", f"商品-{item_id}")
+        url = item_dict.get("url") or f"{self.monitor.base_url}/ca13/{item_id}/"
+
+        self.log("INFO", f"🎯 [专属独立监控就绪] 商品 [{title}] (ID: {item_id}) 独立极速监控协程已上线，直连专属详情页探测！")
+
+        while self.is_running:
+            if item_id in self.purchased_item_ids or item_id in self.active_order_tasks:
+                break
+
+            shop_cfg = self.config.get("shop", {})
+            rush_mode = shop_cfg.get("rush_mode", False) or self.is_in_maintenance
+            # Use dedicated priority_rush_interval_seconds in rush mode, otherwise priority_interval_seconds
+            interval = float(shop_cfg.get("priority_rush_interval_seconds", 0.3)) if rush_mode else float(shop_cfg.get("priority_interval_seconds", 0.5))
+            timeout = float(shop_cfg.get("priority_timeout_seconds", 4.0))
+            hedge_enabled = bool(shop_cfg.get("priority_hedge_enabled", True))
+            hedge_delay = float(shop_cfg.get("priority_hedge_delay", 1.5))
 
             try:
-                # Check top catalog page (/?sort=5) where upcoming items are published
-                # Mamachapp drops appear at the top of the newest modified catalog page
-                html, status = await self.monitor.fetch_page(f"{self.monitor.base_url}/?sort=5")
-                if html and not self.monitor.check_maintenance(html, status):
-                    page_items = self.monitor.parse_items_from_html(html)
-                    page_item_map = {it.item_id: it for it in page_items}
+                # Direct check of this single product's detail page with hedged racing and configurable timeout
+                target_item = await self.monitor.check_item_detail(
+                    url,
+                    timeout=timeout,
+                    hedge_delay=hedge_delay,
+                    enable_hedge=hedge_enabled
+                )
+                if target_item:
+                    if target_item.title and ("优先监控商品" in title or not title):
+                        title = target_item.title
 
-                    # Concurrently check detail pages for any candidates not visible on page 0
-                    missing_cands = [c for c in candidates if str(c.get("item_id")) not in page_item_map and c.get("url")]
-                    if missing_cands:
-                        detail_results = await asyncio.gather(
-                            *(self.monitor.check_item_detail(c["url"]) for c in missing_cands),
-                            return_exceptions=True
-                        )
-                        for d in detail_results:
-                            if isinstance(d, ShopItem):
-                                page_item_map[d.item_id] = d
-
-                    for cand in candidates:
-                        cid = str(cand.get("item_id"))
-                        target_item: Optional[ShopItem] = page_item_map.get(cid)
-
-                        if target_item:
-                            # Update upcoming items registry
-                            if target_item.is_upcoming:
-                                self.upcoming_items[cid] = target_item.to_dict()
-                            elif target_item.in_stock:
-                                # 🔥 THE MOMENT IT BECOMES IN STOCK!
-                                self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】商品 [{target_item.title}] (ID: {target_item.item_id}) 状态已转为有货！立刻分发独立抢购线程！")
-                                self.upcoming_items.pop(cid, None)
-                                self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
-                            else:
-                                # Sold out or not yet dropped
-                                if not target_item.is_upcoming:
-                                    self.upcoming_items.pop(cid, None)
-
+                    if target_item.in_stock:
+                        # 🔥 THE MOMENT THIS DOLL BECOMES IN STOCK!
+                        self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
+                        self.upcoming_items.pop(item_id, None)
+                        self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
+                        break
+                    elif target_item.is_upcoming:
+                        self.upcoming_items[item_id] = target_item.to_dict()
+                    else:
+                        # Status is neither upcoming nor in stock (e.g. sold out or temp closed)
+                        pass
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                self.log("WARN", f"预计上线商品优先扫描异常: {e}")
+                # Isolated error for this doll: does not impact other dolls at all!
+                pass
 
-            await self._sleep_interruptible_priority(interval)
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+
+        self.priority_monitor_tasks.pop(item_id, None)
 
     # =========================================================================
     # THREAD 2: General Catalog Scanner Loop (货架常态与新上架巡检)
@@ -403,7 +454,7 @@ class BotEngine:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
                 self.stats["total_scans"] += 1
-                self.stats["last_scan_time"] = datetime.datetime.now().strftime("%H:%M:%S")
+                self.stats["last_scan_time"] = now_jst().strftime("%H:%M:%S")
                 self.stats["is_in_maintenance"] = is_maintenance
                 self.stats["active_workers_count"] = len(self.active_order_tasks)
 
@@ -562,7 +613,7 @@ class BotEngine:
             "status": "正在连接结算会话...",
             "attempt": 1,
             "max_retries": max_worker_retries,
-            "start_time": datetime.datetime.now().strftime("%H:%M:%S")
+            "start_time": now_jst().strftime("%H:%M:%S")
         }
 
         mode_str = "🛡️ [模拟]" if dry_run else "⚠️ [实盘]"
@@ -599,9 +650,10 @@ class BotEngine:
                     if not hedge_enabled:
                         res = await _single_attempt("主请求")
                     else:
-                        # 🚀 并发对冲机制 (Hedged Requests / 投机重试):
-                        # 启动主请求线程；若超过 hedge_delay 秒未响应，不杀死原线程，
-                        # 维持原线程继续等待排队的同时，并发启动新的对冲重试线程！
+                        # 🚀 滚动并发对冲机制 (Rolling Hedged Requests):
+                        # 启动主请求线程；若超过 hedge_delay 秒未响应，不杀死原主线程（保持原连接排队等待），
+                        # 同时启动对冲探针线程竞速。若对冲探针在 hedge_delay 秒内依然无响应（卡在排队），
+                        # 自动切断该卡死的对冲探针并重启新探针！一旦任一探针或主线程成功，立即获胜并清理其他线程！
                         t1 = asyncio.create_task(_single_attempt("主请求"))
                         done, pending = await asyncio.wait([t1], timeout=hedge_delay)
 
@@ -611,43 +663,77 @@ class BotEngine:
                             except Exception as err:
                                 res = {"success": False, "message": f"主请求异常: {err}"}
                         else:
-                            # t1 尚未返回（服务器排队中或网络延迟较高）
-                            self.log("WARN", f"⏱️ 商品 [{item.title}] (ID: {item_id}) 请求等待超过 {hedge_delay}s，维持原连接排队，同时启动并发对冲重试线程竞速！")
-                            self.active_orders_status[item_id]["status"] = f"双线程对冲竞速中 (轮次 {attempt})"
-                            t2 = asyncio.create_task(_single_attempt("对冲请求"))
+                            self.log("WARN", f"⏱️ 商品 [{item.title}] (ID: {item_id}) 主请求超过 {hedge_delay}s 未响应，维持主连接排队，启动滚动对冲探针竞速！")
+                            max_hedge_probes = 4
+                            current_hedge_task: Optional[asyncio.Task] = None
+                            winner_res: Optional[Dict[str, Any]] = None
 
-                            # 等待 t1 或 t2 任一先完成
-                            done2, pending2 = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-                            first_finished = list(done2)[0]
-                            try:
-                                res = first_finished.result()
-                            except Exception as err:
-                                res = {"success": False, "message": f"对冲竞速异常: {err}"}
+                            for probe_idx in range(1, max_hedge_probes + 1):
+                                if t1.done():
+                                    try:
+                                        winner_res = t1.result()
+                                    except Exception as err:
+                                        winner_res = {"success": False, "message": f"主请求异常: {err}"}
+                                    break
 
-                            # 若抢购成功，立即取消仍在等待的另一个对冲线程，避免重复提交！
-                            if res and res.get("success"):
-                                for p in pending2:
-                                    if not p.done():
-                                        p.cancel()
-                            else:
-                                # 若先完成的那个失败（如 502），但另一个线程仍在等待排队中，
-                                # 则再给另一个线程最多 3 秒等待机会
-                                remaining = list(pending2)
-                                if remaining and not remaining[0].done():
-                                    done3, _ = await asyncio.wait(remaining, timeout=3.0)
-                                    if done3:
+                                self.log("INFO", f"⚡ 启动第 {probe_idx} 轮对冲探针冲刺（主线程仍在保持排队等待）...")
+                                self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
+                                current_hedge_task = asyncio.create_task(_single_attempt(f"对冲探针#{probe_idx}"))
+
+                                done2, pending2 = await asyncio.wait(
+                                    [t1, current_hedge_task],
+                                    timeout=hedge_delay,
+                                    return_when=asyncio.FIRST_COMPLETED
+                                )
+
+                                # Case 1: 主线程完成
+                                if t1 in done2:
+                                    if current_hedge_task and not current_hedge_task.done():
+                                        current_hedge_task.cancel()
+                                    try:
+                                        winner_res = t1.result()
+                                    except Exception as err:
+                                        winner_res = {"success": False, "message": f"主请求异常: {err}"}
+                                    break
+
+                                # Case 2: 当前对冲探针完成
+                                if current_hedge_task in done2:
+                                    try:
+                                        hedge_res = current_hedge_task.result()
+                                    except Exception as err:
+                                        hedge_res = {"success": False, "message": f"对冲探针#{probe_idx}异常: {err}"}
+
+                                    if hedge_res.get("success") or hedge_res.get("is_soldout"):
+                                        if not t1.done():
+                                            t1.cancel()
+                                        winner_res = hedge_res
+                                        break
+                                    else:
+                                        self.log("WARN", f"⚠️ 对冲探针#{probe_idx} 未抢到 ({hedge_res.get('message')})，主线程继续保持排队，准备下一轮探针...")
+                                        current_hedge_task = None
+                                        continue
+
+                                # Case 3: hedge_delay 超时，两者均未完成（对冲探针也卡在排队）
+                                if current_hedge_task and not current_hedge_task.done():
+                                    self.log("WARN", f"✂️ 对冲探针#{probe_idx} 启动超过 {hedge_delay}s 仍无响应（卡在排队），自动切断并重启新连接！主线程继续保持排队...")
+                                    current_hedge_task.cancel()
+                                    current_hedge_task = None
+
+                            # 若所有探针尝试完后主线程仍未完，给予主线程最后的宽限等待
+                            if not winner_res:
+                                active_remaining = [t for t in [t1, current_hedge_task] if t and not t.done()]
+                                if active_remaining:
+                                    done_final, _ = await asyncio.wait(active_remaining, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
+                                    if done_final:
                                         try:
-                                            res_second = list(done3)[0].result()
-                                            if res_second.get("success"):
-                                                res = res_second
-                                        except Exception:
-                                            pass
-                                    for p in remaining:
-                                        if not p.done():
-                                            p.cancel()
+                                            winner_res = list(done_final)[0].result()
+                                        except Exception as err:
+                                            winner_res = {"success": False, "message": f"最终等待异常: {err}"}
+                                    for t in active_remaining:
+                                        if not t.done():
+                                            t.cancel()
 
-                    if not res:
-                        res = {"success": False, "message": "请求无响应"}
+                            res = winner_res if winner_res else {"success": False, "message": "对冲探针所有轮次均无响应"}
 
                     # Check order outcome
                     if res.get("success"):

@@ -138,7 +138,8 @@ class FC2Checkout:
                     "time_field_name": "",
                     "delivery_date": "",
                     "date_field_name": "",
-                    "hidden_fields": {}
+                    "hidden_fields": {},
+                    "extra_selects": {}
                 }
 
                 if form:
@@ -149,85 +150,159 @@ class FC2Checkout:
                         if name and name != "Submit1":
                             form_ctx["hidden_fields"][name] = val
 
-                    # 2. Payment method (e.g. 代金引換)
-                    pay_select = form.select_one("select[name='payment_method']")
                     preferred_pay = self.buyer_info.get("payment_method", "代金引換")
-                    if pay_select:
-                        options = pay_select.find_all("option")
-                        for opt in options:
-                            v = opt.get("value", "")
-                            t = opt.get_text(strip=True)
-                            if preferred_pay and (preferred_pay in t or preferred_pay in v):
-                                form_ctx["payment_method"] = v
-                                break
-                        if not form_ctx["payment_method"] and options:
-                            for opt in options:
-                                v = opt.get("value", "")
-                                if v:
+                    preferred_deli = self.buyer_info.get("delivery_method", "宅急便")
+
+                    # Layer 1: Semantic Table Row Inspection (based on label text like '配送方法', 'お支払い方法')
+                    for tr in form.find_all("tr"):
+                        header_cell = tr.find(["td", "th"])
+                        label_text = header_cell.get_text(strip=True) if header_cell else ""
+                        sel = tr.find("select")
+                        radios = tr.find_all("input", type="radio")
+
+                        if "支払" in label_text:
+                            if sel and not form_ctx["payment_method"]:
+                                for opt in sel.find_all("option"):
+                                    v, t = opt.get("value", ""), opt.get_text(strip=True)
+                                    if preferred_pay and (preferred_pay in t or preferred_pay in v):
+                                        form_ctx["payment_method"] = v
+                                        break
+                                if not form_ctx["payment_method"] and sel.find_all("option"):
+                                    for opt in sel.find_all("option"):
+                                        if opt.get("value"):
+                                            form_ctx["payment_method"] = opt.get("value")
+                                            break
+                            elif radios and not form_ctx["payment_method"]:
+                                for r in radios:
+                                    if "checked" in r.attrs or (preferred_pay and preferred_pay in r.get("value", "")):
+                                        form_ctx["payment_method"] = r.get("value", "")
+                                        break
+                                if not form_ctx["payment_method"] and radios:
+                                    form_ctx["payment_method"] = radios[0].get("value", "")
+
+                        elif "配送" in label_text or "配達方法" in label_text:
+                            if sel and not form_ctx["delivery_method"]:
+                                for opt in sel.find_all("option"):
+                                    v, t = opt.get("value", ""), opt.get_text(strip=True)
+                                    if preferred_deli and (preferred_deli in t or preferred_deli in v):
+                                        form_ctx["delivery_method"] = v
+                                        break
+                                if not form_ctx["delivery_method"] and sel.find_all("option"):
+                                    for opt in sel.find_all("option"):
+                                        if opt.get("value"):
+                                            form_ctx["delivery_method"] = opt.get("value")
+                                            break
+                            elif radios and not form_ctx["delivery_method"]:
+                                for r in radios:
+                                    if "checked" in r.attrs or (preferred_deli and preferred_deli in r.get("value", "")):
+                                        form_ctx["delivery_method"] = r.get("value", "")
+                                        break
+                                if not form_ctx["delivery_method"] and radios:
+                                    form_ctx["delivery_method"] = radios[0].get("value", "")
+
+                        elif "時間" in label_text:
+                            if sel and not form_ctx["delivery_time"]:
+                                form_ctx["time_field_name"] = sel.get("name", "derivery[time]")
+                                for opt in sel.find_all("option"):
+                                    t = opt.get_text(strip=True)
+                                    if "指定なし" in t or "希望なし" in t:
+                                        form_ctx["delivery_time"] = opt.get("value", "")
+                                        break
+                                else:
+                                    first_opt = sel.find("option")
+                                    if first_opt:
+                                        form_ctx["delivery_time"] = first_opt.get("value", "")
+
+                        elif "日" in label_text and "配達" in label_text:
+                            if sel and not form_ctx["delivery_date"]:
+                                form_ctx["date_field_name"] = sel.get("name", "derivery[date]")
+                                for opt in sel.find_all("option"):
+                                    t = opt.get_text(strip=True)
+                                    if "指定なし" in t or "希望なし" in t:
+                                        form_ctx["delivery_date"] = opt.get("value", "")
+                                        break
+                                else:
+                                    first_opt = sel.find("option")
+                                    if first_opt:
+                                        form_ctx["delivery_date"] = first_opt.get("value", "")
+
+                    # Layer 2: Fallback CSS Attribute Selectors
+                    if not form_ctx["payment_method"]:
+                        pay_select = form.select_one("select[name='payment_method'], select[name='payment'], select[name*='pay']")
+                        if pay_select:
+                            for opt in pay_select.find_all("option"):
+                                v, t = opt.get("value", ""), opt.get_text(strip=True)
+                                if preferred_pay and (preferred_pay in t or preferred_pay in v):
                                     form_ctx["payment_method"] = v
                                     break
-                    else:
-                        radios = form.find_all("input", type="radio", attrs={"name": "payment_method"})
-                        for r in radios:
-                            if "checked" in r.attrs or (preferred_pay and preferred_pay in r.get("value", "")):
-                                form_ctx["payment_method"] = r.get("value", "")
-                                break
-                        if not form_ctx["payment_method"] and radios:
-                            form_ctx["payment_method"] = radios[0].get("value", "")
+                            if not form_ctx["payment_method"] and pay_select.find_all("option"):
+                                for opt in pay_select.find_all("option"):
+                                    if opt.get("value"):
+                                        form_ctx["payment_method"] = opt.get("value")
+                                        break
 
-                    # 3. Delivery method (e.g. 宅急便 - 必须项)
-                    deli_select = form.select_one("select[name='delivery_method']")
-                    preferred_deli = self.buyer_info.get("delivery_method", "宅急便")
-                    if deli_select:
-                        options = deli_select.find_all("option")
-                        for opt in options:
-                            v = opt.get("value", "")
-                            t = opt.get_text(strip=True)
-                            if preferred_deli and (preferred_deli in t or preferred_deli in v):
-                                form_ctx["delivery_method"] = v
-                                break
-                        if not form_ctx["delivery_method"] and options:
-                            for opt in options:
-                                v = opt.get("value", "")
-                                if v:
+                    if not form_ctx["delivery_method"]:
+                        deli_select = form.select_one("select[name='delivery_method'], select[name='delivery'], select[name*='deli'], select[name*='ship']")
+                        if deli_select:
+                            for opt in deli_select.find_all("option"):
+                                v, t = opt.get("value", ""), opt.get_text(strip=True)
+                                if preferred_deli and (preferred_deli in t or preferred_deli in v):
                                     form_ctx["delivery_method"] = v
                                     break
-                    else:
-                        radios = form.find_all("input", type="radio", attrs={"name": "delivery_method"})
-                        for r in radios:
-                            if "checked" in r.attrs or (preferred_deli and preferred_deli in r.get("value", "")):
-                                form_ctx["delivery_method"] = r.get("value", "")
-                                break
-                        if not form_ctx["delivery_method"] and radios:
-                            form_ctx["delivery_method"] = radios[0].get("value", "")
+                            if not form_ctx["delivery_method"] and deli_select.find_all("option"):
+                                for opt in deli_select.find_all("option"):
+                                    if opt.get("value"):
+                                        form_ctx["delivery_method"] = opt.get("value")
+                                        break
 
-                    # 4. Delivery time (配達時間の指定: 优先 '指定なし' 或第一个选项)
-                    time_select = form.select_one("select[name='derivery[time]'], select[name='delivery[time]'], select[name='delivery_time'], select[name*='time']")
-                    if time_select:
-                        form_ctx["time_field_name"] = time_select.get("name", "derivery[time]")
-                        for opt in time_select.find_all("option"):
-                            t = opt.get_text(strip=True)
-                            if "指定なし" in t or "希望なし" in t:
-                                form_ctx["delivery_time"] = opt.get("value", "")
-                                break
-                        else:
-                            first_opt = time_select.find("option")
-                            if first_opt:
-                                form_ctx["delivery_time"] = first_opt.get("value", "")
+                    if not form_ctx["delivery_time"]:
+                        time_select = form.select_one("select[name='derivery[time]'], select[name='delivery[time]'], select[name='delivery_time'], select[name*='time']")
+                        if time_select:
+                            form_ctx["time_field_name"] = time_select.get("name", "derivery[time]")
+                            for opt in time_select.find_all("option"):
+                                t = opt.get_text(strip=True)
+                                if "指定なし" in t or "希望なし" in t:
+                                    form_ctx["delivery_time"] = opt.get("value", "")
+                                    break
+                            else:
+                                first_opt = time_select.find("option")
+                                if first_opt:
+                                    form_ctx["delivery_time"] = first_opt.get("value", "")
 
-                    # 5. Delivery date (配達日の指定)
-                    date_select = form.select_one("select[name='derivery[date]'], select[name='delivery[date]'], select[name='delivery_date'], select[name*='date']")
-                    if date_select:
-                        form_ctx["date_field_name"] = date_select.get("name", "derivery[date]")
-                        for opt in date_select.find_all("option"):
-                            t = opt.get_text(strip=True)
-                            if "指定なし" in t or "希望なし" in t:
-                                form_ctx["delivery_date"] = opt.get("value", "")
-                                break
-                        else:
-                            first_opt = date_select.find("option")
-                            if first_opt:
-                                form_ctx["delivery_date"] = first_opt.get("value", "")
+                    if not form_ctx["delivery_date"]:
+                        date_select = form.select_one("select[name='derivery[date]'], select[name='delivery[date]'], select[name='delivery_date'], select[name*='date']")
+                        if date_select:
+                            form_ctx["date_field_name"] = date_select.get("name", "derivery[date]")
+                            for opt in date_select.find_all("option"):
+                                t = opt.get_text(strip=True)
+                                if "指定なし" in t or "希望なし" in t:
+                                    form_ctx["delivery_date"] = opt.get("value", "")
+                                    break
+                            else:
+                                first_opt = date_select.find("option")
+                                if first_opt:
+                                    form_ctx["delivery_date"] = first_opt.get("value", "")
+
+                    # Layer 3: Universal Fallback for ANY other unhandled <select> elements in the form
+                    known_select_names = {
+                        "payment_method", "delivery_method",
+                        form_ctx.get("time_field_name", ""),
+                        form_ctx.get("date_field_name", ""),
+                        "address[in][ken]"
+                    }
+                    for any_sel in form.find_all("select"):
+                        s_name = any_sel.get("name")
+                        if s_name and s_name not in known_select_names:
+                            # Pick selected option or first option with value
+                            sel_opt = any_sel.find("option", selected=True)
+                            if sel_opt and sel_opt.get("value") is not None:
+                                form_ctx["extra_selects"][s_name] = sel_opt.get("value")
+                            else:
+                                opts = any_sel.find_all("option")
+                                for o in opts:
+                                    if o.get("value"):
+                                        form_ctx["extra_selects"][s_name] = o.get("value")
+                                        break
 
                 return True, form_ctx, None
             except Exception as e:
@@ -283,6 +358,11 @@ class FC2Checkout:
         date_name = ctx.get("date_field_name")
         if date_name and "delivery_date" in ctx:
             post_data[date_name] = str(ctx["delivery_date"])
+
+        # Include any extra unhandled selects from the page
+        for s_name, s_val in ctx.get("extra_selects", {}).items():
+            if s_name not in post_data:
+                post_data[s_name] = str(s_val)
 
         req_headers = {
             **self.headers,

@@ -851,6 +851,20 @@ async function fetchConfig() {
     const cfgPriorityEl = document.getElementById("cfg-priority-interval");
     if (cfgPriorityEl) cfgPriorityEl.value = priorityInterval;
 
+    const priorityRushInterval = (shop.priority_rush_interval_seconds !== undefined) ? shop.priority_rush_interval_seconds : 0.3;
+    const priorityTimeout = (shop.priority_timeout_seconds !== undefined) ? shop.priority_timeout_seconds : 4.0;
+    const priorityHedgeEnabled = (shop.priority_hedge_enabled !== undefined) ? !!shop.priority_hedge_enabled : true;
+    const priorityHedgeDelay = (shop.priority_hedge_delay !== undefined) ? shop.priority_hedge_delay : 1.5;
+
+    const cfgPriorityRushEl = document.getElementById("cfg-priority-rush-interval");
+    if (cfgPriorityRushEl) cfgPriorityRushEl.value = priorityRushInterval;
+    const cfgPriorityTimeoutEl = document.getElementById("cfg-priority-timeout");
+    if (cfgPriorityTimeoutEl) cfgPriorityTimeoutEl.value = priorityTimeout;
+    const chkPriorityHedgeEl = document.getElementById("chk-priority-hedge");
+    if (chkPriorityHedgeEl) chkPriorityHedgeEl.checked = priorityHedgeEnabled;
+    const cfgPriorityHedgeDelayEl = document.getElementById("cfg-priority-hedge-delay");
+    if (cfgPriorityHedgeDelayEl) cfgPriorityHedgeDelayEl.value = priorityHedgeDelay;
+
     const qInterval = document.getElementById("quick-interval");
     const qRush = document.getElementById("quick-rush-interval");
     const qPriority = document.getElementById("quick-priority-interval");
@@ -946,6 +960,15 @@ function initIntervalControls() {
   if (cfgRush) cfgRush.addEventListener("change", (e) => handleRush(e.target.value));
   if (quickPriority) quickPriority.addEventListener("change", (e) => handlePriority(e.target.value));
   if (cfgPriority) cfgPriority.addEventListener("change", (e) => handlePriority(e.target.value));
+
+  const cfgPriorityRush = document.getElementById("cfg-priority-rush-interval");
+  if (cfgPriorityRush) {
+    cfgPriorityRush.addEventListener("change", (e) => {
+      const num = parseFloat(e.target.value);
+      if (isNaN(num) || num <= 0) return;
+      syncAndSave({ priority_rush_interval_seconds: num }, `⚡ 优先商品极速检测间隔已设为 ${num} 秒 (即时生效)`, "warn");
+    });
+  }
 }
 
 // Save Configuration
@@ -961,6 +984,11 @@ async function saveConfig() {
     .filter(Boolean);
 
   const priorityIntervalEl = document.getElementById("cfg-priority-interval");
+  const priorityRushIntervalEl = document.getElementById("cfg-priority-rush-interval");
+  const priorityTimeoutEl = document.getElementById("cfg-priority-timeout");
+  const chkPriorityHedgeEl = document.getElementById("chk-priority-hedge");
+  const priorityHedgeDelayEl = document.getElementById("cfg-priority-hedge-delay");
+
   const sessionRetriesEl = document.getElementById("cfg-session-retries");
   const sessionRetryDelayEl = document.getElementById("cfg-session-retry-delay");
   const workerRetriesEl = document.getElementById("cfg-worker-retries");
@@ -989,6 +1017,10 @@ async function saveConfig() {
       interval_seconds: parseFloat(document.getElementById("cfg-interval").value) || 3.0,
       rush_interval_seconds: parseFloat(document.getElementById("cfg-rush-interval").value) || 0.8,
       priority_interval_seconds: priorityIntervalEl ? (parseFloat(priorityIntervalEl.value) || 0.5) : 0.5,
+      priority_rush_interval_seconds: priorityRushIntervalEl ? (parseFloat(priorityRushIntervalEl.value) || 0.3) : 0.3,
+      priority_timeout_seconds: priorityTimeoutEl ? (parseFloat(priorityTimeoutEl.value) || 4.0) : 4.0,
+      priority_hedge_enabled: chkPriorityHedgeEl ? chkPriorityHedgeEl.checked : true,
+      priority_hedge_delay: priorityHedgeDelayEl ? (parseFloat(priorityHedgeDelayEl.value) || 1.5) : 1.5,
       scan_pages: parseInt(document.getElementById("cfg-scan-pages").value, 10) || 2
     },
     order: {
