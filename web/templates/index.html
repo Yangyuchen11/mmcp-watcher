@@ -366,11 +366,11 @@
                 <div class="form-row">
                   <div class="form-group">
                     <label for="cfg-interval" title="货架大盘常态监控时的页面轮询扫描间隔">货架日常巡检间隔 (秒)</label>
-                    <input type="number" id="cfg-interval" step="0.5" min="1" value="3.0">
+                    <input type="number" id="cfg-interval" step="0.1" min="0.1" value="3.0">
                   </div>
                   <div class="form-group">
                     <label for="cfg-rush-interval" title="极速突击模式下的货架页面轮询间隔">货架极速巡检间隔 (秒)</label>
-                    <input type="number" id="cfg-rush-interval" step="0.1" min="0.3" value="0.8">
+                    <input type="number" id="cfg-rush-interval" step="0.01" min="0.01" value="0.8">
                   </div>
                 </div>
 
@@ -403,12 +403,12 @@
                   <div class="form-row">
                     <div class="form-group">
                       <label for="cfg-priority-interval" title="常态下每个优先商品独立详情页的检测间隔（建议 0.3~0.5秒）">优先常态间隔 (秒)</label>
-                      <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" value="0.5">
+                      <input type="number" id="cfg-priority-interval" step="0.01" min="0.01" value="0.5">
                     </div>
                     <div class="form-group">
                       <label for="cfg-priority-rush-interval" title="极速模式下每个优先商品独立详情页的检测间隔（建议 0.2~0.5秒，完全由您自主设定）">优先极速间隔
                         (秒)</label>
-                      <input type="number" id="cfg-priority-rush-interval" step="0.05" min="0.05" value="0.3">
+                      <input type="number" id="cfg-priority-rush-interval" step="0.01" min="0.01" value="0.3">
                     </div>
                   </div>
 

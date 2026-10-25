@@ -428,16 +428,38 @@ class BotEngine:
 
             try:
                 # Direct check of this single product's detail page with hedged racing and configurable timeout
-                target_item = await self.monitor.check_item_detail(
+                target_item, is_maint = await self.monitor.check_item_detail(
                     url,
                     timeout=timeout,
                     hedge_delay=hedge_delay,
                     hedge_timeout=hedge_timeout,
                     enable_hedge=hedge_enabled
                 )
+
+                # 🛡️ 维护开始前哨交叉联动：若单品详情页率先撞上关店/维护页面，立即将全局同频置为维护状态！
+                if is_maint:
+                    if not self.is_in_maintenance:
+                        self.is_in_maintenance = True
+                        self.stats["is_in_maintenance"] = True
+                        self.stats["last_scan_status"] = "前哨优先探测：商城维护中 (開店準備中/メンテナンス)"
+                        self.log("WARN", f"🚧 【前哨优先侦测】重点商品 [{title}] (ID: {item_id}) 详情页率先检测到店铺进入维护/关店状态！已同步激活全局维护待命状态！")
+
                 if target_item:
                     if target_item.title and ("优先监控商品" in title or not title):
                         title = target_item.title
+
+                    # 🛡️ 维护结束前哨交叉联动：若大盘此前被标记为维护中，此处单品详情页正常刷出为开门铁证！
+                    # 立即唤醒大盘解除维护并触发其余重点商品的直接加购冲刺
+                    if self.is_in_maintenance:
+                        self.is_in_maintenance = False
+                        self.stats["is_in_maintenance"] = False
+                        self.auto_rush_active = True
+                        auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
+                        self.auto_rush_start_time = time.time()
+                        self.auto_rush_end_time = time.time() + auto_rush_dur
+                        self.log("SUCCESS", f"⚡ 【前哨交叉引爆】优先商品 [{title}] (ID: {item_id}) 率先检测到店铺重新开门！已同步解除维护状态并触发全体直接加购！")
+                        if self.config.get("order", {}).get("enable_maintenance_direct_order", True):
+                            self.trigger_maintenance_direct_orders()
 
                     if target_item.in_stock:
                         # 🔥 THE MOMENT THIS DOLL BECOMES IN STOCK!
@@ -446,18 +468,6 @@ class BotEngine:
                             self.log("SUCCESS", f"🔥【重磅！预计上线商品正式开售！】[{target_item.title}] (ID: {item_id}) 状态已转为有货！专属监控协程立刻派发独立抢购线程！")
                             self.upcoming_items.pop(item_id, None)
                             self.dispatch_order_worker(target_item, event_type="UPCOMING_DROPPED")
-
-                            # 🛡️ 交叉前哨联动：若大盘此前被标记为维护中，此处单品详情页有货为开门铁证！
-                            # 立即唤醒大盘解除维护并触发其余重点商品的直接加购冲刺
-                            if self.is_in_maintenance:
-                                self.is_in_maintenance = False
-                                self.auto_rush_active = True
-                                auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
-                                self.auto_rush_start_time = time.time()
-                                self.auto_rush_end_time = time.time() + auto_rush_dur
-                                self.log("SUCCESS", f"⚡ 【前哨交叉引爆】优先商品 (ID: {item_id}) 率先检测到有货，已同步解除维护状态并触发全体直接加购！")
-                                if self.config.get("order", {}).get("enable_maintenance_direct_order", True):
-                                    self.trigger_maintenance_direct_orders()
                     elif target_item.is_upcoming:
                         self.upcoming_items[item_id] = target_item.to_dict()
                     else:
@@ -609,6 +619,20 @@ class BotEngine:
                     self.stats["total_matches"] += len(triggers)
                     for event_type, item in triggers:
                         self._process_trigger_event(event_type, item)
+
+                # Continuous in-stock replenishment check:
+                # If an item on the shelf matches rules and is in_stock, but its previous order worker
+                # finished all worker retries without successfully buying, re-dispatch a fresh worker!
+                if items and self.config.get("order", {}).get("auto_buy", True):
+                    max_orders = self.config.get("order", {}).get("max_orders", 1)
+                    quota_ok = (max_orders <= 0) or (len(self.purchased_item_ids) < max_orders)
+                    if quota_ok:
+                        for it in items:
+                            if it.in_stock and it.item_id not in self.purchased_item_ids and it.item_id not in self.soldout_item_ids:
+                                if it.item_id not in self.active_order_tasks or self.active_order_tasks[it.item_id].done():
+                                    if self.monitor.matches_rules(it, target_keywords, exclude_keywords, min_price, max_price):
+                                        self.log("INFO", f"🔄 货架商品 [{it.title}] (ID: {it.item_id}) 依然有货且尚未购得，重新派发全新独立抢购线程接力！")
+                                        self.dispatch_order_worker(it, event_type="IN_STOCK")
 
             except Exception as e:
                 self.stats["last_scan_status"] = f"Error: {e}"

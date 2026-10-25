@@ -459,8 +459,11 @@ class FC2Monitor:
         hedge_delay: Optional[float] = None,
         hedge_timeout: Optional[float] = None,
         enable_hedge: bool = False
-    ) -> Optional[ShopItem]:
-        """Fetches and checks a single product detail page directly, with optional hedged requests"""
+    ) -> Tuple[Optional[ShopItem], bool]:
+        """
+        Fetches and checks a single product detail page directly, with optional hedged requests.
+        Returns: (ShopItem or None, is_maintenance: bool)
+        """
         if enable_hedge and hedge_delay is not None:
             html, status = await self.fetch_page_hedged(
                 item_url,
@@ -472,9 +475,19 @@ class FC2Monitor:
         else:
             html, status = await self.fetch_page(item_url, timeout=timeout)
 
-        if not html or status != 200:
-            return None
-        return self.parse_single_item_page(html, item_url)
+        if not html:
+            return None, False
+
+        # Detect store maintenance / closure page on product detail URL
+        is_maint = self.check_maintenance(html, status)
+        if is_maint:
+            return None, True
+
+        if status != 200:
+            return None, False
+
+        item = self.parse_single_item_page(html, item_url)
+        return item, False
 
     async def scan_full_catalog(self, max_pages: int = 25) -> List[ShopItem]:
         """
@@ -540,6 +553,50 @@ class FC2Monitor:
 
         return all_items
 
+    def matches_rules(
+        self,
+        item: ShopItem,
+        target_keywords: List[str],
+        exclude_keywords: List[str],
+        min_price: Optional[int] = None,
+        max_price: Optional[int] = None
+    ) -> bool:
+        """Checks if a ShopItem matches target/exclude keywords and price range"""
+        title_lower = item.title.lower()
+
+        # 1. Exclude keywords check
+        if any(exc.lower() in title_lower for exc in exclude_keywords if exc):
+            return False
+
+        # 2. Target keywords check
+        if target_keywords:
+            def _kw_check(kw: str) -> bool:
+                kw_clean = kw.strip().lower()
+                if not kw_clean:
+                    return False
+                if kw_clean in title_lower:
+                    return True
+                # Smart doll name matching: allow matching 'ひな' when keyword is 'ひなちゃん'
+                if kw_clean.endswith("ちゃん") and len(kw_clean) > 3:
+                    base_name = kw_clean[:-3].strip()
+                    if base_name in title_lower:
+                        return True
+                return False
+
+            if not any(_kw_check(kw) for kw in target_keywords):
+                return False
+
+        # 3. Price range check (0 or None means unlimited)
+        pv = item.price_value
+        if min_price and min_price > 0:
+            if pv is None or pv < min_price:
+                return False
+        if max_price and max_price > 0:
+            if pv is None or pv > max_price:
+                return False
+
+        return True
+
     def check_matches(
         self,
         current_items: List[ShopItem],
@@ -562,41 +619,8 @@ class FC2Monitor:
         triggers: List[Tuple[str, ShopItem]] = []
 
         for item in current_items:
-            title_lower = item.title.lower()
-
-            # 1. Exclude keywords check
-            if any(exc.lower() in title_lower for exc in exclude_keywords if exc):
+            if not self.matches_rules(item, target_keywords, exclude_keywords, min_price, max_price):
                 continue
-
-            # 2. Target keywords check
-            matches_target = True
-            if target_keywords:
-                def _kw_check(kw: str) -> bool:
-                    kw_clean = kw.strip().lower()
-                    if not kw_clean:
-                        return False
-                    if kw_clean in title_lower:
-                        return True
-                    # Smart doll name matching: allow matching 'ひな' when keyword is 'ひなちゃん'
-                    if kw_clean.endswith("ちゃん") and len(kw_clean) > 3:
-                        base_name = kw_clean[:-3].strip()
-                        if base_name in title_lower:
-                            return True
-                    return False
-
-                matches_target = any(_kw_check(kw) for kw in target_keywords)
-
-            if not matches_target:
-                continue
-
-            # 3. Price range check (0 or None means unlimited)
-            pv = item.price_value
-            if min_price and min_price > 0:
-                if pv is None or pv < min_price:
-                    continue
-            if max_price and max_price > 0:
-                if pv is None or pv > max_price:
-                    continue
 
             # If force trigger is active (e.g. right after maintenance ends)
             if force_instock_trigger and item.in_stock:
