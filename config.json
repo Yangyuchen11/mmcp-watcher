@@ -9,6 +9,7 @@
     "target_keywords": [],
     "exclude_keywords": [],
     "min_price": 10000,
+    "max_price": 0,
     "scan_pages": 1,
     "priority_rush_interval_seconds": 0.1,
     "priority_timeout_seconds": 4,
@@ -17,8 +18,7 @@
     "priority_hedge_timeout_seconds": 2,
     "empty_catalog_threshold": 2,
     "enable_empty_catalog_detection": true,
-    "auto_rush_duration_seconds": 180,
-    "max_price": 0
+    "auto_rush_duration_seconds": 180
   },
   "order": {
     "auto_buy": true,
@@ -35,7 +35,7 @@
     "hedge_requests": true,
     "hedge_delay": 1,
     "enable_maintenance_direct_order": true,
-    "maintenance_direct_worker_retries": 60
+    "maintenance_direct_worker_retries": 100
   },
   "buyer": {
     "name": "山田　太郎",
