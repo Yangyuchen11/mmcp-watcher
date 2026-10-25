@@ -64,10 +64,13 @@ class BotEngine:
         self.soldout_item_ids: set = set()                          # item_ids confirmed sold out by detail monitor or checkout
         self.active_order_tasks: Dict[str, asyncio.Task] = {}       # item_id -> running Task
         self.active_orders_status: Dict[str, Dict[str, Any]] = {}   # item_id -> live status dict
+        self.active_checkouts: Dict[str, List[FC2Checkout]] = {}    # item_id -> active FC2Checkout instances
         self.priority_monitor_tasks: Dict[str, asyncio.Task] = {}   # item_id -> isolated direct detail polling Task
         self.prewarmed_checkouts: Dict[str, Dict[str, Any]] = {}    # item_id -> {"primary": FC2Checkout, "hedge": FC2Checkout}
         self.prewarm_task: Optional[asyncio.Task] = None
         self._order_semaphore: Optional[asyncio.Semaphore] = None
+        self._quota_cond: Optional[asyncio.Condition] = None
+        self._inflight_final_item_ids: set = set()
         self.is_in_maintenance: bool = False
         self.auto_rush_active: bool = False
         self.auto_rush_start_time: float = 0.0
@@ -85,6 +88,19 @@ class BotEngine:
             max_w = int(self.config.get("order", {}).get("max_concurrent_workers", 3))
             self._order_semaphore = asyncio.Semaphore(max(1, max_w))
         return self._order_semaphore
+
+    def _get_quota_cond(self) -> asyncio.Condition:
+        if self._quota_cond is None:
+            self._quota_cond = asyncio.Condition()
+        return self._quota_cond
+
+    def _has_inflight_checkout(self, item_id: str) -> bool:
+        """Returns True if an active checkout for item_id has already added to cart or entered final submission."""
+        chk_list = self.active_checkouts.get(str(item_id), [])
+        return any(
+            chk is not None and (chk.steps_completed >= 1 or chk.in_final_stage or chk.final_submitted)
+            for chk in chk_list
+        )
 
     def log(self, level: str, message: str):
         now_str = now_jst().strftime("%Y-%m-%d %H:%M:%S")
@@ -128,6 +144,7 @@ class BotEngine:
         count = len(self.purchased_item_ids)
         self.purchased_item_ids.clear()
         self.soldout_item_ids.clear()
+        self._inflight_final_item_ids.clear()
         self.stats["total_orders_succeeded"] = 0
         self.stats["total_orders_attempted"] = 0
         self.log("INFO", f"🔄 抢购会话已重置！已清空此前记录的 {count} 款已购商品与售罄状态，新一轮发售可重新抢购")
@@ -140,13 +157,28 @@ class BotEngine:
             if items:
                 catalog_dicts = []
                 upcoming_dict = {}
+                seen_ids = set()
                 for it in items:
+                    iid = str(it.item_id)
+                    seen_ids.add(iid)
                     d = it.to_dict()
-                    if it.item_id in self.priority_item_ids:
+                    if iid in self.priority_item_ids:
                         d["is_priority"] = True
                     catalog_dicts.append(d)
                     if it.is_upcoming:
-                        upcoming_dict[it.item_id] = d
+                        upcoming_dict[iid] = d
+
+                # Preserve previously locked upcoming items that were missed due to partial page errors
+                for prev_id, prev_dict in list(self.upcoming_items.items()):
+                    prev_id = str(prev_id)
+                    if (
+                        prev_id not in seen_ids
+                        and prev_id not in self.purchased_item_ids
+                        and prev_id not in self.soldout_item_ids
+                    ):
+                        if prev_id in self.priority_item_ids:
+                            prev_dict["is_priority"] = True
+                        upcoming_dict[prev_id] = prev_dict
 
                 self.all_catalog_items = catalog_dicts
                 self.recent_items = self.all_catalog_items
@@ -196,8 +228,12 @@ class BotEngine:
         """Returns active concurrent order worker statuses"""
         return list(self.active_orders_status.values())
 
-    def _cleanup_order_task(self, item_id: str):
+    def _cleanup_order_task(self, item_id: str, task: Optional[asyncio.Task] = None):
         """Callback to clean up task references upon task completion or cancellation"""
+        item_id = str(item_id)
+        current = self.active_order_tasks.get(item_id)
+        if task is not None and current is not None and current is not task:
+            return
         self.active_order_tasks.pop(item_id, None)
         self.active_orders_status.pop(item_id, None)
         self.stats["active_workers_count"] = len(self.active_order_tasks)
@@ -208,11 +244,11 @@ class BotEngine:
         task = self.active_order_tasks.get(item_id)
         if task and not task.done():
             task.cancel()
-            self._cleanup_order_task(item_id)
+            self._cleanup_order_task(item_id, task)
             self.log("WARN", f"🛑 [{reason}] 已终止商品 ID {item_id} 的并发抢购线程")
             return True
         elif item_id in self.active_order_tasks:
-            self._cleanup_order_task(item_id)
+            self._cleanup_order_task(item_id, task)
             return True
         return False
 
@@ -481,17 +517,21 @@ class BotEngine:
                     elif target_item.is_upcoming:
                         self.upcoming_items[item_id] = target_item.to_dict()
                     else:
-                        # Status is neither upcoming nor in stock (e.g. sold out or temp closed)
-                        # Check if confirmed sold out to immediately cancel order attempts and detail polling
-                        is_soldout_detail = any(kw in target_item.stock_text for kw in SOLDOUT_KEYWORDS) or not target_item.in_stock
+                        # Status is neither upcoming nor in stock.
+                        # Only mark as sold out if explicit SOLDOUT_KEYWORDS appear in stock_text!
+                        # Never mark truncated/unknown pages ("状態不明") as sold out, and never kill an in-flight checkout!
+                        is_soldout_detail = any(kw in target_item.stock_text for kw in SOLDOUT_KEYWORDS)
                         if is_soldout_detail:
-                            self.soldout_item_ids.add(item_id)
-                            self.upcoming_items.pop(item_id, None)
-                            self.stats["upcoming_count"] = len(self.upcoming_items)
-                            asyncio.create_task(self._close_prewarmed_sessions(item_id))
-                            self.log("WARN", f"❌ [专属详情监控] 商品 [{target_item.title}] (ID: {item_id}) 详情页已确认为售罄 ({target_item.stock_text})！")
-                            self.cancel_order_worker(item_id, reason="详情页已售罄")
-                            break
+                            if self._has_inflight_checkout(item_id):
+                                self.log("INFO", f"⏳ [专属详情监控] 商品 [{target_item.title}] (ID: {item_id}) 详情页显示售罄 ({target_item.stock_text})，但本机结算通道已加购在途，等待最终确认结果！")
+                            else:
+                                self.soldout_item_ids.add(item_id)
+                                self.upcoming_items.pop(item_id, None)
+                                self.stats["upcoming_count"] = len(self.upcoming_items)
+                                asyncio.create_task(self._close_prewarmed_sessions(item_id))
+                                self.log("WARN", f"❌ [专属详情监控] 商品 [{target_item.title}] (ID: {item_id}) 详情页已确认为售罄 ({target_item.stock_text})！")
+                                self.cancel_order_worker(item_id, reason="详情页已售罄")
+                                break
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -544,7 +584,6 @@ class BotEngine:
 
                 self.stats["total_scans"] += 1
                 self.stats["last_scan_time"] = now_jst().strftime("%H:%M:%S")
-                self.stats["is_in_maintenance"] = is_maintenance
                 self.stats["auto_rush_active"] = self.auto_rush_active
                 self.stats["active_workers_count"] = len(self.active_order_tasks)
 
@@ -554,6 +593,7 @@ class BotEngine:
                         self.is_in_maintenance = True
                         self.auto_rush_active = True
                         rush_int = self.config.get("shop", {}).get("rush_interval_seconds", 0.8)
+                        interval = rush_int
                         reason_tag = f"【原因: {maint_reason}】" if maint_reason else ""
                         self.log("WARN", f"🚨 【发售前维护侦测】检测到 Mamachapp 商城进入维护中！{reason_tag} 通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询 ({rush_int}s)！")
                         await self.dispatcher.broadcast(
@@ -561,12 +601,22 @@ class BotEngine:
                             content=f"店铺已进入维护模式{reason_tag}，这是发售前补库存的明确信号！\n机器人已自动切换为最高警戒极速抢购模式（{rush_int}s 轮询），一旦维护结束开售立即抢购！",
                             url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com")
                         )
+                    self.stats["is_in_maintenance"] = True
                     self.stats["last_scan_status"] = f"维护中 ({maint_reason or 'Maintenance'}, {elapsed_ms}ms)"
                     await self._sleep_interruptible_catalog(interval)
                     continue
                 else:
                     if self.is_in_maintenance:
+                        # Guard against transient 503/network error or empty page during maintenance:
+                        # Only exit maintenance when a valid non-error catalog response is received!
+                        if not items and (maint_reason.startswith("网络错误") or maint_reason.startswith("空页面")):
+                            self.stats["is_in_maintenance"] = True
+                            self.stats["last_scan_status"] = f"维护中·网关抖动待命 ({maint_reason}, {elapsed_ms}ms)"
+                            await self._sleep_interruptible_catalog(interval)
+                            continue
+
                         self.is_in_maintenance = False
+                        self.stats["is_in_maintenance"] = False
                         self.auto_rush_active = True
                         auto_rush_dur = float(shop_cfg.get("auto_rush_duration_seconds", 60.0))
                         self.auto_rush_start_time = time.time()
@@ -591,6 +641,8 @@ class BotEngine:
                             max_price=max_price,
                             force_instock_trigger=True
                         )
+                    else:
+                        self.stats["is_in_maintenance"] = False
 
                 # Fast Double-Check: If 1st strike of empty catalog on normal interval, probe again in 1.0s to confirm
                 if self.monitor.empty_catalog_consecutive > 0 and not rush_mode:
@@ -900,7 +952,7 @@ class BotEngine:
         """
         order_cfg = self.config.get("order", {})
         auto_buy = order_cfg.get("auto_buy", True)
-        item_id = item.item_id
+        item_id = str(item.item_id)
 
         if not auto_buy:
             self.log("INFO", f"ℹ️ 自动购买开关为关闭状态，仅执行提醒，不触发自动下单: {item.title}")
@@ -927,7 +979,7 @@ class BotEngine:
 
         # 4. Launch dedicated background task!
         task = asyncio.create_task(self._run_order_worker(item, event_type))
-        task.add_done_callback(lambda t: self._cleanup_order_task(item_id))
+        task.add_done_callback(lambda t, iid=item_id: self._cleanup_order_task(iid, t))
         self.active_order_tasks[item_id] = task
         self.stats["active_workers_count"] = len(self.active_order_tasks)
 
@@ -937,7 +989,8 @@ class BotEngine:
         Runs in background, retries on 502/503/server busy, and releases when bought or sold out.
         Does NOT block scanning or other order threads!
         """
-        item_id = item.item_id
+        item_id = str(item.item_id)
+        current_worker_task = asyncio.current_task()
         order_cfg = self.config.get("order", {})
         session_retries = int(order_cfg.get("session_retries", 3))
         session_retry_delay = float(order_cfg.get("session_retry_delay", 0.15))
@@ -975,7 +1028,16 @@ class BotEngine:
         prewarmed_primary = self._pop_prewarmed_checkout(item_id, "primary")
         prewarmed_hedge = self._pop_prewarmed_checkout(item_id, "hedge")
 
-        async def _single_attempt(label: str, prewarmed_checkout: Optional[FC2Checkout] = None) -> Dict[str, Any]:
+        # Per-worker final submission lock so primary + hedge never double-submit Submit2 for the same item
+        worker_final_lock = asyncio.Lock()
+        worker_final_active_or_done = False
+
+        async def _single_attempt(
+            label: str,
+            prewarmed_checkout: Optional[FC2Checkout] = None,
+            chk_holder: Optional[List[FC2Checkout]] = None
+        ) -> Dict[str, Any]:
+            nonlocal worker_final_active_or_done
             used_prewarm = prewarmed_checkout is not None and not prewarmed_checkout.client.is_closed
             if used_prewarm:
                 checkout = prewarmed_checkout
@@ -994,45 +1056,109 @@ class BotEngine:
             checkout.retry_delay = session_retry_delay
             checkout.buyer_info = self.config.get("buyer", {})
 
+            if chk_holder is not None:
+                chk_holder.append(checkout)
+            self.active_checkouts.setdefault(item_id, []).append(checkout)
+
+            reserved_final_slot = False
+
+            async def _before_final_submit_gate() -> bool:
+                nonlocal worker_final_active_or_done, reserved_final_slot
+                async with worker_final_lock:
+                    if worker_final_active_or_done or item_id in self.purchased_item_ids:
+                        return False
+                    worker_final_active_or_done = True
+
+                if not dry_run:
+                    cond = self._get_quota_cond()
+                    async with cond:
+                        max_orders_now = int(self.config.get("order", {}).get("max_orders", 1))
+                        while (
+                            max_orders_now > 0
+                            and len(self.purchased_item_ids) < max_orders_now
+                            and item_id not in self._inflight_final_item_ids
+                            and len(self.purchased_item_ids | self._inflight_final_item_ids) >= max_orders_now
+                        ):
+                            await cond.wait()
+                            max_orders_now = int(self.config.get("order", {}).get("max_orders", 1))
+
+                        if item_id in self.purchased_item_ids:
+                            async with worker_final_lock:
+                                worker_final_active_or_done = False
+                            return False
+                        if max_orders_now > 0 and len(self.purchased_item_ids) >= max_orders_now:
+                            async with worker_final_lock:
+                                worker_final_active_or_done = False
+                            return False
+                        self._inflight_final_item_ids.add(item_id)
+                        reserved_final_slot = True
+                return True
+
+            checkout.before_final_submit = _before_final_submit_gate
+            attempt_res: Optional[Dict[str, Any]] = None
             try:
-                return await checkout.execute_checkout(
+                attempt_res = await checkout.execute_checkout(
                     item_id=item_id,
                     item_title=item.title,
                     item_url=item.url,
                     quantity=quantity
                 )
+                return attempt_res
             finally:
+                succeeded = bool(attempt_res and attempt_res.get("success"))
+                if not succeeded:
+                    async with worker_final_lock:
+                        if item_id not in self.purchased_item_ids:
+                            worker_final_active_or_done = False
+                if reserved_final_slot:
+                    cond = self._get_quota_cond()
+                    async with cond:
+                        if succeeded and not dry_run:
+                            self.purchased_item_ids.add(item_id)
+                        self._inflight_final_item_ids.discard(item_id)
+                        cond.notify_all()
+                chk_list = self.active_checkouts.get(item_id)
+                if chk_list and checkout in chk_list:
+                    chk_list.remove(checkout)
                 await checkout.close()
 
         try:
             sem = self._get_semaphore()
-            async with sem:
-                for attempt in range(1, max_worker_retries + 1):
-                    # Check if detail page reported sold out
-                    if item_id in self.soldout_item_ids:
-                        self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 页面详情已确认为售罄 (在庫切れ/完売)，下单线程立即终止尝试")
-                        return
+            for attempt in range(1, max_worker_retries + 1):
+                # Check if detail page reported sold out
+                if item_id in self.soldout_item_ids:
+                    self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 页面详情已确认为售罄 (在庫切れ/完売)，下单线程立即终止尝试")
+                    return
 
-                    # Check overall quota
-                    max_orders = order_cfg.get("max_orders", 1)
-                    if max_orders > 0 and len(self.purchased_item_ids) >= max_orders and item_id not in self.purchased_item_ids:
-                        self.log("INFO", f"⏹️ 已达到设定的购买目标数 ({len(self.purchased_item_ids)}/{max_orders} 款)，本线程停止对 [{item.title}] 的加购")
-                        return
+                # Check overall quota
+                max_orders = order_cfg.get("max_orders", 1)
+                if max_orders > 0 and len(self.purchased_item_ids) >= max_orders and item_id not in self.purchased_item_ids:
+                    self.log("INFO", f"⏹️ 已达到设定的购买目标数 ({len(self.purchased_item_ids)}/{max_orders} 款)，本线程停止对 [{item.title}] 的加购")
+                    return
 
+                if item_id in self.active_orders_status:
                     self.active_orders_status[item_id]["attempt"] = attempt
                     self.active_orders_status[item_id]["status"] = f"加购/提交中 (轮次 {attempt}/{max_worker_retries})"
 
-                    res: Optional[Dict[str, Any]] = None
-                    primary_checkout_arg = prewarmed_primary if attempt == 1 else None
+                res: Optional[Dict[str, Any]] = None
+                primary_checkout_arg = prewarmed_primary if attempt == 1 else None
+
+                # Acquire semaphore per attempt and release before retry sleep so 4+ items never starve!
+                async with sem:
+                    if item_id in self.soldout_item_ids:
+                        return
+                    if max_orders > 0 and len(self.purchased_item_ids) >= max_orders and item_id not in self.purchased_item_ids:
+                        return
 
                     if not hedge_enabled:
                         res = await _single_attempt("主请求", primary_checkout_arg)
                     else:
-                        # 🚀 滚动并发对冲机制 (Rolling Hedged Requests):
-                        # 启动主请求线程；若超过 hedge_delay 秒未响应，不杀死原主线程（保持原连接排队等待），
-                        # 同时启动对冲探针线程竞速。若对冲探针在 hedge_delay 秒内依然无响应（卡在排队），
-                        # 自动切断该卡死的对冲探针并重启新探针！一旦任一探针或主线程成功，立即获胜并清理其他线程！
-                        t1 = asyncio.create_task(_single_attempt("主请求", primary_checkout_arg))
+                        # 🚀 智能进度感知滚动对冲机制 (Progress-Aware Hedged Requests):
+                        # 启动主请求线程；若超过 hedge_delay 秒仍未完成加购，保留主连接继续排队并启动对冲探针。
+                        # 一旦主请求已完成加购 (steps_completed >= 1) 或进入最终确认阶段 (in_final_stage)，
+                        # 绝不盲目切断主请求或滥发探针，全力保护已抢到手的购物车直通结账！
+                        t1_holder: List[FC2Checkout] = []
+                        t1 = asyncio.create_task(_single_attempt("主请求", primary_checkout_arg, t1_holder))
                         done, pending = await asyncio.wait([t1], timeout=hedge_delay)
 
                         if t1 in done:
@@ -1042,9 +1168,11 @@ class BotEngine:
                                 res = {"success": False, "message": f"主请求异常: {err}"}
                         else:
                             self.log("WARN", f"⏱️ 商品 [{item.title}] (ID: {item_id}) 主请求超过 {hedge_delay}s 未响应，维持主连接排队，启动滚动对冲探针竞速！")
-                            max_hedge_probes = 4
+                            max_hedge_probes = 2
                             current_hedge_task: Optional[asyncio.Task] = None
+                            current_hedge_holder: List[FC2Checkout] = []
                             winner_res: Optional[Dict[str, Any]] = None
+                            probe_timeout = max(hedge_delay * 4.0, 2.5)
 
                             for probe_idx in range(1, max_hedge_probes + 1):
                                 if t1.done():
@@ -1054,14 +1182,23 @@ class BotEngine:
                                         winner_res = {"success": False, "message": f"主请求异常: {err}"}
                                     break
 
+                                t1_chk = t1_holder[0] if t1_holder else None
+                                if t1_chk and (t1_chk.steps_completed >= 1 or t1_chk.in_final_stage):
+                                    # Primary has already secured cart and is progressing through checkout!
+                                    break
+
                                 self.log("INFO", f"⚡ 启动第 {probe_idx} 轮对冲探针冲刺（主线程仍在保持排队等待）...")
-                                self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
+                                if item_id in self.active_orders_status:
+                                    self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
                                 hedge_checkout_arg = prewarmed_hedge if probe_idx == 1 else None
-                                current_hedge_task = asyncio.create_task(_single_attempt(f"对冲探针#{probe_idx}", hedge_checkout_arg))
+                                current_hedge_holder = []
+                                current_hedge_task = asyncio.create_task(
+                                    _single_attempt(f"对冲探针#{probe_idx}", hedge_checkout_arg, current_hedge_holder)
+                                )
 
                                 done2, pending2 = await asyncio.wait(
                                     [t1, current_hedge_task],
-                                    timeout=hedge_delay,
+                                    timeout=probe_timeout,
                                     return_when=asyncio.FIRST_COMPLETED
                                 )
 
@@ -1083,101 +1220,138 @@ class BotEngine:
                                         hedge_res = {"success": False, "message": f"对冲探针#{probe_idx}异常: {err}"}
 
                                     if hedge_res.get("success") or hedge_res.get("is_soldout"):
-                                        if not t1.done():
+                                        t1_chk = t1_holder[0] if t1_holder else None
+                                        if not t1.done() and not (t1_chk and t1_chk.final_submitted):
                                             t1.cancel()
                                         winner_res = hedge_res
                                         break
                                     else:
-                                        self.log("WARN", f"⚠️ 对冲探针#{probe_idx} 未抢到 ({hedge_res.get('message')})，主线程继续保持排队，准备下一轮探针...")
+                                        self.log("WARN", f"⚠️ 对冲探针#{probe_idx} 未抢到 ({hedge_res.get('message')})，主线程继续保持排队...")
                                         current_hedge_task = None
                                         continue
 
-                                # Case 3: hedge_delay 超时，两者均未完成（对冲探针也卡在排队）
+                                # Case 3: probe_timeout 到期，检查主线程或探针是否已取得加购进展
+                                t1_chk = t1_holder[0] if t1_holder else None
+                                h_chk = current_hedge_holder[0] if current_hedge_holder else None
+                                if t1_chk and (t1_chk.steps_completed >= 1 or t1_chk.in_final_stage):
+                                    if current_hedge_task and not current_hedge_task.done() and not (h_chk and h_chk.in_final_stage):
+                                        current_hedge_task.cancel()
+                                        current_hedge_task = None
+                                    break
+                                if h_chk and (h_chk.steps_completed >= 1 or h_chk.in_final_stage):
+                                    break
+
                                 if current_hedge_task and not current_hedge_task.done():
-                                    self.log("WARN", f"✂️ 对冲探针#{probe_idx} 启动超过 {hedge_delay}s 仍无响应（卡在排队），自动切断并重启新连接！主线程继续保持排队...")
+                                    self.log("WARN", f"✂️ 对冲探针#{probe_idx} 仍无进展（卡在排队），自动切断并准备后续等待...")
                                     current_hedge_task.cancel()
                                     current_hedge_task = None
 
-                            # 若所有探针尝试完后主线程仍未完，给予主线程最后的宽限等待
+                            # 等待存活的主通道或已加购探针完成整单结算
                             if not winner_res:
                                 active_remaining = [t for t in [t1, current_hedge_task] if t and not t.done()]
-                                if active_remaining:
-                                    done_final, _ = await asyncio.wait(active_remaining, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
-                                    if done_final:
-                                        try:
-                                            winner_res = list(done_final)[0].result()
-                                        except Exception as err:
-                                            winner_res = {"success": False, "message": f"最终等待异常: {err}"}
-                                    for t in active_remaining:
-                                        if not t.done():
-                                            t.cancel()
+                                final_wait_timeout = max(20.0, hedge_delay * 16.0)
+                                while active_remaining:
+                                    done_final, pending_final = await asyncio.wait(
+                                        active_remaining,
+                                        timeout=final_wait_timeout,
+                                        return_when=asyncio.FIRST_COMPLETED
+                                    )
+                                    if not done_final:
+                                        for t in pending_final:
+                                            if not t.done():
+                                                t.cancel()
+                                        break
+
+                                    finished_task = list(done_final)[0]
+                                    try:
+                                        cand_res = finished_task.result()
+                                    except Exception as err:
+                                        cand_res = {"success": False, "message": f"最终等待异常: {err}"}
+
+                                    if cand_res.get("success") or cand_res.get("is_soldout") or not pending_final:
+                                        winner_res = cand_res
+                                        for t in pending_final:
+                                            if not t.done():
+                                                t.cancel()
+                                        break
+                                    else:
+                                        active_remaining = list(pending_final)
 
                             res = winner_res if winner_res else {"success": False, "message": "对冲探针所有轮次均无响应"}
 
-                    # Check order outcome
-                    if res.get("success"):
-                        is_dry_run = res.get("dry_run", False)
-                        if not is_dry_run:
-                            # ⚠️ 仅实盘真实抢购成功出单时，才正式标记为已购、从待抢列表中移除并释放长连接！
-                            self.purchased_item_ids.add(item_id)
-                            self.upcoming_items.pop(item_id, None)
-                            self.stats["upcoming_count"] = len(self.upcoming_items)
-                            asyncio.create_task(self._close_prewarmed_sessions(item_id))
-                            self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
-                        else:
-                            # 🛡️ 模拟模式下仅记录模拟出单与流程日志，绝不把商品从监控列表中误剔除，保持长连接热就绪！
-                            self.simulated_item_ids.add(item_id)
-                            self.log("INFO", f"🛡️ [模拟测试完成] 商品 [{item.title}] (ID: {item_id}) 模拟结算链路跑通，保持预计监控与长连接预热就绪")
-
-                        self.order_history.insert(0, res)
-                        if len(self.order_history) > 50:
-                            self.order_history.pop()
-
-                        order_title = f"{'🛡️ [模拟]' if is_dry_run else '🎉 [实盘]'} 抢购成功！"
-                        order_content = f"商品: {item.title}\n结果: {res.get('message')}\n耗时: {res.get('elapsed_seconds')}s\n"
-                        if res.get("order_id"):
-                            order_content += f"订单号: {res.get('order_id')}\n"
-                        if res.get("timeline"):
-                            order_content += "步骤流程:\n" + "\n".join(f"• {t}" for t in res.get("timeline", []))
-
-                        self.log("SUCCESS", f"🎉 [并发线程抢购成功] {item.title} -> {res.get('message')} (耗时 {res.get('elapsed_seconds')}s)")
-                        await self.dispatcher.broadcast(order_title, order_content, url=item.url)
-
-                        max_orders = order_cfg.get("max_orders", 1)
-                        if not is_dry_run and max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
-                            self.log("SUCCESS", f"🎉 已成功抢齐全部预期款式 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止其余下单线程与监控！")
-                            for other_id, other_task in list(self.active_order_tasks.items()):
-                                if other_id != item_id and not other_task.done():
-                                    other_task.cancel()
-                            await self.stop()
-                        elif not is_dry_run:
-                            remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
-                            self.log("INFO", f"已成功抢下 1 款商品 (ID: {item_id})，当前已获 {len(self.purchased_item_ids)} 款，继续监控其余款式 ({remaining})")
-                        return
-
-                    # Handle failure: only genuine soldout (在庫切れ / 売り切れ / 品切れ / 完売 / 售罄) stops retrying!
-                    # "购物车为空" (カートに商品は入っていません) does NOT stop retrying, worker will continue rapid attempts.
-                    is_soldout = res.get("is_soldout", False)
-                    if not is_soldout:
-                        msg = res.get("message", "")
-                        if any(k in msg for k in SOLDOUT_KEYWORDS):
-                            is_soldout = True
-
-                    if is_soldout:
-                        self.soldout_item_ids.add(item_id)
+                # Check order outcome
+                if res and res.get("success"):
+                    is_dry_run = res.get("dry_run", False)
+                    if not is_dry_run:
+                        # ⚠️ 仅实盘真实抢购成功出单时，才正式标记为已购、从待抢列表中移除并释放长连接！
+                        self.purchased_item_ids.add(item_id)
                         self.upcoming_items.pop(item_id, None)
                         self.stats["upcoming_count"] = len(self.upcoming_items)
                         asyncio.create_task(self._close_prewarmed_sessions(item_id))
-                        self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 已确认售罄 (在庫切れ)，并发下单线程停止抢购")
-                        self.order_history.insert(0, res)
+                        self.stats["total_orders_succeeded"] = len(self.purchased_item_ids)
+                    else:
+                        # 🛡️ 模拟模式下仅记录模拟出单与流程日志，绝不把商品从监控列表中误剔除，保持长连接热就绪！
+                        self.simulated_item_ids.add(item_id)
+                        self.log("INFO", f"🛡️ [模拟测试完成] 商品 [{item.title}] (ID: {item_id}) 模拟结算链路跑通，保持预计监控与长连接预热就绪")
+
+                    self.order_history.insert(0, res)
+                    if len(self.order_history) > 50:
+                        self.order_history.pop()
+
+                    order_title = f"{'🛡️ [模拟]' if is_dry_run else '🎉 [实盘]'} 抢购成功！"
+                    order_content = f"商品: {item.title}\n结果: {res.get('message')}\n耗时: {res.get('elapsed_seconds')}s\n"
+                    if res.get("order_id"):
+                        order_content += f"订单号: {res.get('order_id')}\n"
+                    if res.get("timeline"):
+                        order_content += "步骤流程:\n" + "\n".join(f"• {t}" for t in res.get("timeline", []))
+
+                    self.log("SUCCESS", f"🎉 [并发线程抢购成功] {item.title} -> {res.get('message')} (耗时 {res.get('elapsed_seconds')}s)")
+                    await self.dispatcher.broadcast(order_title, order_content, url=item.url)
+
+                    max_orders = order_cfg.get("max_orders", 1)
+                    if not is_dry_run and max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+                        self.log("SUCCESS", f"🎉 已成功抢齐全部预期款式 ({len(self.purchased_item_ids)}/{max_orders} 款)，自动停止其余下单线程与监控！")
+                        for other_id, other_task in list(self.active_order_tasks.items()):
+                            if other_id != item_id and not other_task.done():
+                                other_task.cancel()
+                        await self.stop()
+                    elif not is_dry_run:
+                        remaining = "不限" if max_orders == 0 else f"还可抢购 {max_orders - len(self.purchased_item_ids)} 款"
+                        self.log("INFO", f"已成功抢下 1 款商品 (ID: {item_id})，当前已获 {len(self.purchased_item_ids)} 款，继续监控其余款式 ({remaining})")
+                    return
+
+                # If aborted because overall quota was just fulfilled by another item thread, exit cleanly
+                if res and res.get("aborted_by_gate"):
+                    max_orders = order_cfg.get("max_orders", 1)
+                    if max_orders > 0 and len(self.purchased_item_ids) >= max_orders:
+                        self.log("INFO", f"⏹️ 其余并发通道已达成最大购买限额 ({len(self.purchased_item_ids)}/{max_orders} 款)，本线程安全终止以防超买: [{item.title}]")
                         return
 
-                    # Shop busy / 502 / 503 / network jitter -> Persistent fast retry
-                    if attempt < max_worker_retries:
-                        self.log("WARN", f"⚡ [并发线程下单繁忙] 商品 [{item.title}] (ID: {item_id}): {res.get('message')}，正在毫秒级重复重试 (第 {attempt + 1}/{max_worker_retries} 次)...")
-                        await asyncio.sleep(retry_delay)
-                    else:
-                        self.log("ERROR", f"❌ 商品 [{item.title}] (ID: {item_id}) 已达最大并发重试次数 ({max_worker_retries} 次)，最终未完成")
+                # Handle failure: only genuine soldout (在庫切れ / 売り切れ / 品切れ / 完売 / 售罄) stops retrying!
+                # "购物车为空" (カートに商品は入っていません) does NOT stop retrying, worker will continue rapid attempts.
+                is_soldout = bool(res and res.get("is_soldout", False))
+                if not is_soldout and res:
+                    msg = res.get("message", "")
+                    if any(k in msg for k in SOLDOUT_KEYWORDS):
+                        is_soldout = True
+
+                if is_soldout:
+                    self.soldout_item_ids.add(item_id)
+                    self.upcoming_items.pop(item_id, None)
+                    self.stats["upcoming_count"] = len(self.upcoming_items)
+                    asyncio.create_task(self._close_prewarmed_sessions(item_id))
+                    self.log("WARN", f"❌ 商品 [{item.title}] (ID: {item_id}) 已确认售罄 (在庫切れ)，并发下单线程停止抢购")
+                    if res:
+                        self.order_history.insert(0, res)
+                    return
+
+                # Shop busy / 502 / 503 / network jitter -> Persistent fast retry (semaphore released during sleep!)
+                if attempt < max_worker_retries:
+                    self.log("WARN", f"⚡ [并发线程下单繁忙] 商品 [{item.title}] (ID: {item_id}): {res.get('message') if res else '未知异常'}，正在毫秒级重复重试 (第 {attempt + 1}/{max_worker_retries} 次)...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    self.log("ERROR", f"❌ 商品 [{item.title}] (ID: {item_id}) 已达最大并发重试次数 ({max_worker_retries} 次)，最终未完成")
+                    if res:
                         self.order_history.insert(0, res)
 
         except asyncio.CancelledError:
@@ -1186,9 +1360,7 @@ class BotEngine:
         except Exception as e:
             self.log("ERROR", f"并发下单线程发生异常 [{item.title}]: {e}")
         finally:
-            self.active_order_tasks.pop(item_id, None)
-            self.active_orders_status.pop(item_id, None)
-            self.stats["active_workers_count"] = len(self.active_order_tasks)
+            self._cleanup_order_task(item_id, current_worker_task)
 
     # =========================================================================
     # MANUAL TEST CHECKOUT

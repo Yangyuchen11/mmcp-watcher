@@ -76,6 +76,12 @@ UPCOMING_KEYWORDS = [
     "販売予定",
     "発売予定",
     "販売開始前",
+    "販売開始",
+    "発売開始",
+    "予約開始",
+    "近日発売",
+    "近日販売",
+    "準備中",
     "予定",
     "coming soon"
 ]
@@ -155,6 +161,8 @@ class FC2Monitor:
         if not enable_hedge or hedge_delay <= 0 or hedge_delay >= timeout:
             return await self.fetch_page(url, timeout=timeout)
 
+        max_hedge_spawns = 3  # Cap extra hedge spawns so total HTTP requests stay well <= 10
+
         # 1. Start primary probe
         p1_task = asyncio.create_task(self.fetch_page(url, timeout=timeout))
 
@@ -165,6 +173,8 @@ class FC2Monitor:
                 res = p1_task.result()
                 if res and res[1] == 200:
                     return res
+                # If p1 finished quickly with a non-200 error (e.g. 503 busy), wait briefly before retrying
+                await asyncio.sleep(0.35)
         except Exception:
             pass
 
@@ -195,7 +205,9 @@ class FC2Monitor:
         async def _run_hedge_probes():
             nonlocal winner_result
             h_timeout = max(0.5, hedge_timeout)
-            while not winner_event.is_set():
+            spawns = 0
+            while not winner_event.is_set() and spawns < max_hedge_spawns:
+                spawns += 1
                 h_task = asyncio.create_task(self.fetch_page(url, timeout=h_timeout))
                 try:
                     done, _ = await asyncio.wait([h_task], timeout=h_timeout)
@@ -205,6 +217,10 @@ class FC2Monitor:
                             winner_result = res
                             winner_event.set()
                             return
+                        # Non-200 fast failure (e.g. 503): back off to avoid flooding the server
+                        if not winner_event.is_set():
+                            await asyncio.sleep(0.45)
+                            continue
                     else:
                         # Hedge probe timed out! Cancel stalled probe and retry next hedge probe
                         h_task.cancel()
@@ -217,7 +233,7 @@ class FC2Monitor:
                     break
 
                 if not winner_event.is_set():
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.1)
 
         p1_watcher = asyncio.create_task(_watch_p1())
         hedge_runner = asyncio.create_task(_run_hedge_probes())
@@ -250,26 +266,43 @@ class FC2Monitor:
         """
         Precise detection of FC2 Cart maintenance / storefront closure:
         - Differentiates between transient 502/503 server congestion vs genuine store closure!
-        - Transient 502/503/504 errors mean the server is busy, NOT under intentional maintenance.
-        - True store maintenance replaces the storefront with an explicit maintenance page.
+        - Supports both HTTP 200 and HTTP 503 explicit maintenance pages.
+        - Never misidentifies pages that already contain valid product detail or catalog containers.
         """
         # Transient network/gateway errors: server busy, not store maintenance!
-        if status_code in (0, 408, 429, 500, 502, 503, 504, 520, 521, 522, 524):
+        if status_code in (0, 408, 429, 500, 502, 504, 520, 521, 522, 524):
             return False
 
-        if not html or len(html.strip()) < 50:
+        if not html or len(html.strip()) < 45:
+            return False
+
+        # If standard product detail or catalog item containers are present, the storefront is open!
+        # Individual product descriptions or item stock text containing "準備中" must NEVER flag whole-site maintenance.
+        if self.has_detail_container(html) or self.has_items_container(html):
             return False
 
         html_lower = html.lower()
 
-        # Check explicit store-closure keywords in HTML
-        for kw in MAINTENANCE_KEYWORDS:
-            if kw.lower() in html_lower:
-                return True
+        # Pure server congestion / FastCGI overload page is transient busy, NOT store maintenance
+        if ("アクセスが集中" in html_lower or "アクセス集中" in html_lower) and "カート閉鎖" not in html_lower and "カートを閉鎖" not in html_lower:
+            return False
 
         # Check dedicated maintenance DOM container
         if "#maintenance" in html_lower or "class=\"maintenance" in html_lower or "class='maintenance" in html_lower:
             return True
+
+        # If HTTP 503, only treat as maintenance when explicit store-maintenance notices are present
+        if status_code == 503:
+            explicit_503_maint = [
+                "メンテナンス中", "メンテナンスを行っております", "開店準備中",
+                "ショップ準備中", "一時閉店", "店舗改装中", "商品入替中"
+            ]
+            return any(kw.lower() in html_lower for kw in explicit_503_maint)
+
+        # Check explicit store-closure keywords in HTML (HTTP 200)
+        for kw in MAINTENANCE_KEYWORDS:
+            if kw.lower() in html_lower:
+                return True
 
         return False
 
@@ -305,6 +338,49 @@ class FC2Monitor:
             "class=\"btn_submit_cart\"" in html_lower or
             "class='btn_submit_cart'" in html_lower
         )
+
+    @staticmethod
+    def _classify_stock_status(stock_text: str, has_cart_button: bool) -> Tuple[bool, bool, Optional[str], str]:
+        """
+        Accurately classifies (in_stock, is_upcoming, scheduled_time, normalized_stock_text):
+        - Strips shipping/delivery schedule phrases (e.g. '11月中旬発送予定', '順次出荷予定') so in-stock items
+          with shipping estimates are NEVER mistaken for unreleased upcoming items.
+        - Recognizes date/time release patterns even without the word '予定' (e.g. '１１月８日２１時発売').
+        - Preserves '状態不明' when stock_text is missing on a truncated page instead of fabricating '在庫切れ'.
+        """
+        raw = (stock_text or "").strip()
+        # Strip shipping/delivery estimate phrases before checking upcoming keywords
+        sale_text = re.sub(r"[^（(、。\s]*?(?:発送|出荷|お届け|納品|配送|到着)予定", "", raw)
+
+        has_soldout = any(kw in raw.lower() or kw in raw for kw in SOLDOUT_KEYWORDS)
+        has_instock_kw = any(kw in raw for kw in INSTOCK_KEYWORDS)
+
+        is_upcoming = (
+            any(kw in sale_text.lower() or kw in sale_text for kw in UPCOMING_KEYWORDS)
+            or bool(re.search(r"(?:[0-9０-９一二三四五六七八九十]+(?:月|日|時)|今夜|本日|明日|近日).*?(?:発売|販売|開始|予約)", sale_text))
+        )
+
+        # If explicitly marked '在庫あり' and not an explicit pre-open notice, it is in stock!
+        if "在庫あり" in raw and not any(k in sale_text for k in ("開始予定", "発売予定", "販売予定", "販売開始前")):
+            is_upcoming = False
+
+        scheduled_time = None
+        if is_upcoming:
+            in_stock = False
+            m = re.search(r"([0-9０-９一二三四五六七八九十月日時分:\s~～ー夜午前後]+?)(?:開始予定|発売予定|販売予定|販売開始|発売開始|発売|販売|予定)", raw)
+            if m and m.group(1).strip():
+                scheduled_time = m.group(1).strip()
+            else:
+                scheduled_time = raw
+        elif has_soldout:
+            in_stock = False
+        elif has_cart_button or has_instock_kw:
+            in_stock = True
+        else:
+            in_stock = False
+
+        norm_text = raw if raw else ("在庫あり" if in_stock else "状態不明")
+        return in_stock, is_upcoming, scheduled_time, norm_text
 
     def parse_items_from_html(self, html: str) -> List[ShopItem]:
         soup = BeautifulSoup(html, DEFAULT_PARSER)
@@ -360,26 +436,7 @@ class FC2Monitor:
 
             has_cart_button = bool(node.select_one(".btn_submit_cart, input[value='カートに入れる'], a[href*='cart_in']"))
 
-            # Determine upcoming vs sold out vs in stock
-            is_upcoming = any(kw in stock_text for kw in UPCOMING_KEYWORDS)
-            has_soldout = any(kw in stock_text for kw in SOLDOUT_KEYWORDS)
-            has_instock_kw = any(kw in stock_text for kw in INSTOCK_KEYWORDS)
-
-            scheduled_time = None
-            if is_upcoming:
-                # Scheduled / Upcoming: strictly NOT in stock
-                in_stock = False
-                m = re.search(r"([0-9０-９一二三四五六七八九十月日時分:\s~～ー]+?)(?:開始予定|発売予定|販売予定|予定)", stock_text)
-                if m and m.group(1).strip():
-                    scheduled_time = m.group(1).strip()
-                else:
-                    scheduled_time = stock_text
-            elif has_soldout:
-                in_stock = False
-            elif has_cart_button or has_instock_kw:
-                in_stock = True
-            else:
-                in_stock = has_cart_button
+            in_stock, is_upcoming, scheduled_time, norm_stock_text = self._classify_stock_status(stock_text, has_cart_button)
 
             item = ShopItem(
                 item_id=str(item_id),
@@ -388,7 +445,7 @@ class FC2Monitor:
                 url=full_url,
                 image_url=img_url,
                 in_stock=in_stock,
-                stock_text=stock_text if stock_text else ("在庫あり" if in_stock else "在庫切れ"),
+                stock_text=norm_stock_text,
                 category_id=category_id,
                 is_upcoming=is_upcoming,
                 scheduled_time=scheduled_time
@@ -441,24 +498,7 @@ class FC2Monitor:
 
         has_cart_button = bool(soup.select_one(".btn_submit_cart, input[value='カートに入れる']"))
 
-        is_upcoming = any(kw in stock_text for kw in UPCOMING_KEYWORDS)
-        has_soldout = any(kw in stock_text for kw in SOLDOUT_KEYWORDS)
-        has_instock_kw = any(kw in stock_text for kw in INSTOCK_KEYWORDS)
-
-        scheduled_time = None
-        if is_upcoming:
-            in_stock = False
-            m = re.search(r"([0-9０-９一二三四五六七八九十月日時分:\s~～ー]+?)(?:開始予定|発売予定|販売予定|予定)", stock_text)
-            if m and m.group(1).strip():
-                scheduled_time = m.group(1).strip()
-            else:
-                scheduled_time = stock_text
-        elif has_soldout:
-            in_stock = False
-        elif has_cart_button or has_instock_kw:
-            in_stock = True
-        else:
-            in_stock = has_cart_button
+        in_stock, is_upcoming, scheduled_time, norm_stock_text = self._classify_stock_status(stock_text, has_cart_button)
 
         return ShopItem(
             item_id=str(item_id),
@@ -467,7 +507,7 @@ class FC2Monitor:
             url=url,
             image_url=img_url,
             in_stock=in_stock,
-            stock_text=stock_text if stock_text else ("在庫あり" if in_stock else "在庫切れ"),
+            stock_text=norm_stock_text,
             category_id=category_id,
             is_upcoming=is_upcoming,
             scheduled_time=scheduled_time
@@ -527,7 +567,7 @@ class FC2Monitor:
         """
         # 1. Fetch page 0 first to discover maximum page count from pagination
         page0_html, status = await self.fetch_page(f"{self.base_url}/?sort=5&page=0")
-        if not page0_html:
+        if not page0_html or status != 200:
             return []
 
         all_items: List[ShopItem] = []
@@ -573,7 +613,7 @@ class FC2Monitor:
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for res in results:
-                if isinstance(res, tuple) and res[0]:
+                if isinstance(res, tuple) and res[0] and res[1] == 200:
                     html, _ = res
                     for it in self.parse_items_from_html(html):
                         if it.item_id not in seen_ids:
@@ -717,7 +757,7 @@ class FC2Monitor:
             if self.check_maintenance(html, status):
                 self.empty_catalog_consecutive = 0
                 return [], [], True, "官方维护公告标识"
-            if not html:
+            if not html or status != 200:
                 return [], [], False, f"网络错误 (HTTP {status})"
             items = self.parse_items_from_html(html)
 
@@ -743,6 +783,7 @@ class FC2Monitor:
             seen_ids = set()
             first_page_html = ""
             first_page_status = 0
+            any_ok_page = False
             for idx, res in enumerate(results):
                 if isinstance(res, tuple):
                     html, status = res
@@ -752,11 +793,15 @@ class FC2Monitor:
                     if self.check_maintenance(html, status):
                         self.empty_catalog_consecutive = 0
                         return [], [], True, "官方维护公告标识"
-                    if html:
+                    if html and status == 200:
+                        any_ok_page = True
                         for it in self.parse_items_from_html(html):
                             if it.item_id not in seen_ids:
                                 seen_ids.add(it.item_id)
                                 items.append(it)
+
+            if not any_ok_page:
+                return [], [], False, f"网络错误 (HTTP {first_page_status})"
 
             # Check consecutive empty catalog anomaly on page 0
             if enable_empty_catalog_check and first_page_status == 200 and first_page_html and len(first_page_html.strip()) > 300:

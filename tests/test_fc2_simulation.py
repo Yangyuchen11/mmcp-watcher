@@ -442,6 +442,8 @@ class FakeFC2Server:
             return self._redirect("/check")
         if p == "/check":
             return self._html(self.cart_page(sess))
+        if p == "/regi" and m == "POST" and "back" in form:
+            return self._html(self.regi_page(sess))
         if p == "/regi" and m == "POST" and "Submit2" in form:
             return self._final(ctx)
         if p == "/regi" and m == "POST" and "Submit1" in form:
@@ -808,6 +810,47 @@ async def a08():
     expect(not r3[2] and len(r3[0]) == 1 and mon.empty_catalog_consecutive == 0, f"商品恢复后未解除: {r3[2]}, {r3[0]}")
 
 
+@case("A09", "整站", "维护期间货架巡检遇一次 503/网络超时：不能误判为『维护结束！』并提前直发加购", "高")
+async def a09():
+    srv = FakeFC2Server()
+    srv.add_item("507", stock=3, upcoming=True)
+    srv.maintenance = True
+    async with sim_bot(srv, shop={"interval_seconds": 0.1, "rush_interval_seconds": 0.1, "scan_pages": 1}) as bot:
+        bot.upcoming_items["507"] = {"item_id": "507", "title": "ドール507", "url": f"{BASE}/ca13/507/"}
+        t = asyncio.create_task(bot._catalog_monitor_loop())
+        bot._sim_tasks.append(t)
+        await wait_until(lambda: bot.is_in_maintenance, 1.0)
+        # 维护期间偶发一次 503 网关繁忙
+        srv.inject("GET", "/", "status", 503, times=1)
+        await wait_until(lambda: srv.count("GET", "/") >= 2, 1.5)
+        await asyncio.sleep(0.15)
+        premature_fired = any("【维护结束！新品开售！】" in l for l in bot._sim_logs) or srv.count("POST", "/cart_in") > 0
+        expect(bot.is_in_maintenance and not premature_fired,
+               f"维护期间仅出现 1 次 HTTP 503，大盘就误报『【维护结束！新品开售！】』并提前直发加购 "
+               f"(cart_in次数={srv.count('POST', '/cart_in')})。\n"
+               "        原因: check_once 在 503/超时时返回 (items=[], triggers=[], is_maintenance=False)；"
+               "_catalog_monitor_loop 只看 if is_maintenance: ... else: if self.is_in_maintenance:，没检查扫描是否真实拿到有效货架响应。\n"
+               "        后果: 关店维护期间只要网关抖动一次，就会误发开售通知并把直发加购轮次提前打空在维护页上。" + tail(bot))
+
+
+@case("A10", "整站", "在售商品库存栏带发货时间说明 (如『在庫あり（11月中旬発送予定）』)：不能因『予定』被判为未开售", "高")
+async def a10():
+    srv = FakeFC2Server()
+    srv.add_item("508", stock=3, stock_text="在庫あり（11月中旬発送予定）", cart_button=True)
+    with fc2_network(srv):
+        mon = await make_monitor()
+        try:
+            item, is_m = await mon.check_item_detail(f"{BASE}/ca13/508/", timeout=2.0)
+            cat_items, _, _, _ = await mon.check_once(f"{BASE}/?sort=5", [], [], scan_pages=1)
+        finally:
+            await close_monitor(mon)
+    cat_item = cat_items[0] if cat_items else None
+    expect(item is not None and item.in_stock and not item.is_upcoming and cat_item and cat_item.in_stock,
+           f"明明写着『在庫あり』且有购物车按钮，解析结果却是 in_stock={item and item.in_stock}, is_upcoming={item and item.is_upcoming}。\n"
+           "        原因: UPCOMING_KEYWORDS 包含宽泛的二字词『予定』，且 if is_upcoming 分支排在 has_instock_kw 之前，强制把 in_stock 置为 False。\n"
+           "        后果: 凡是库存栏注明『○○発送予定』『順次発送予定』的在售/预约商品，机器人都当成未开售，永远不会下单。")
+
+
 # =========================================================================
 # B. 步骤1：加入购物车 POST /cart_in
 # =========================================================================
@@ -997,6 +1040,33 @@ async def c05():
            "        后果: 模拟测试显示『跑通了』，并不能证明实盘能下单，模拟结果不可信。")
 
 
+@case("C06", "结算表单", "支付方式为单选框 <input type='radio'> 且文案在标签文本中：应选中用户配置的『代金引換』", "高")
+async def c06():
+    srv = FakeFC2Server()
+    srv.add_item("616", stock=3)
+    radio_regi_html = wrap_min(
+        '<div class="contents" id="checkout_page"><h2>ご注文情報</h2>'
+        '<form name="form" method="post" action="/regi"><table class="table1">'
+        '<tr><td class="td2">お支払い方法</td><td class="td3">'
+        '<label><input type="radio" name="payment_method" value="1" checked="checked" /> 銀行振込</label>'
+        '<label><input type="radio" name="payment_method" value="2" /> 代金引換</label>'
+        '</td></tr></table><input type="hidden" name="Submit1" value="true" /></form></div>'
+    )
+    srv.inject("GET", "/regi", "html", radio_regi_html)
+    with fc2_network(srv):
+        chk = new_checkout()
+        try:
+            await chk.add_to_cart("616")
+            ok, ctx, err = await chk.get_regi_form()
+        finally:
+            await chk.close()
+    expect(ok and ctx and ctx.get("payment_method") == "2",
+           f"用户配置 preferred_pay='代金引換' (对应 value='2')，但 get_regi_form 选中的是 payment_method={ctx and ctx.get('payment_method')!r} (銀行振込)。\n"
+           "        原因: radio 分支只检查 'checked' in r.attrs or preferred_pay in r.get('value', '')，既优先命中了默认 checked 的第一项，"
+           "又没有读取 radio 旁边的 label 文本，且 Layer 2 fallback 完全忽略了 radio。\n"
+           "        后果: 当店铺用 radio 选择支付/配送方式且 value 为数字编码时，机器人会选错支付方式或校验失败。")
+
+
 # =========================================================================
 # D. 步骤3：提交收件信息 POST /regi (Submit1)
 # =========================================================================
@@ -1113,6 +1183,51 @@ async def e05():
                "        原因: 最终提交的读超时被当作普通失败，worker 换新会话从头再买一次，没有任何『订单可能已成立』的判断"
                "（比如去查订单完成页或邮件，或者在最终提交之后不再重试）。\n"
                "        后果: 实盘重复下单（代引订单），可能被店铺拉黑。" + tail(bot))
+
+
+@case("E06", "最终确认", "[实盘] 确认页同时含『修正する』(type=submit) 与『注文する』按钮：不能把修正按钮一并提交导致退回表单", "高")
+async def e06():
+    srv = FakeFC2Server()
+    srv.add_item("636", stock=3)
+    def _confirm_with_submit_back(ctx: ReqCtx) -> str:
+        return wrap_min(
+            '<div class="contents" id="checkout_page"><h2>ご注文内容の確認</h2>'
+            f'{TPL_REGI_FORM}<input type="hidden" name="confirm_token" value="{ctx.session.confirm_token}" />'
+            '<p class="registerbutton">'
+            '<input type="submit" name="back" value="修正する" class="btn_submit_return" />'
+            '<input type="submit" name="Submit2" value="注文する" class="btn_submit_order" />'
+            '</p></form></div>'
+        )
+    with fc2_network(srv):
+        chk = new_checkout(dry_run=False)
+        try:
+            await chk.add_to_cart("636")
+            _, fctx, _ = await chk.get_regi_form()
+            await chk.submit_regi_info(fctx)
+            sess = list(srv.sessions.values())[0]
+            confirm_html = _confirm_with_submit_back(ReqCtx("POST", "/regi", {}, sess, 0.0))
+            res = await chk.confirm_final_order(confirm_html)
+        finally:
+            await chk.close()
+    last_post = [r for r in srv.requests if r.method == "POST" and r.path == "/regi"][-1]
+    expect(len(srv.orders) == 1 and "back" not in last_post.form,
+           f"最终提交把确认表单里所有 <input> 原样打包发送: {dict(last_post.form)}，其中包含 back='修正する'，"
+           f"导致服务器按『返回修改』处理，实际生成订单数={len(srv.orders)} (返回 msg={res.get('message')})。\n"
+           "        原因: confirm_final_order 遍历 form.find_all('input') 时未过滤非确认用途的 submit/button/reset 或未勾选的 radio/checkbox。\n"
+           "        后果: 只要确认页的『戻る/修正する』也是 input[type=submit]，最终提交就会退回上一页而无法成单。")
+
+
+@case("E07", "最终确认", "[实盘] 最终提交瞬间最后 1 件被抢光 (カートにある商品が売り切れました)：应标记 is_soldout=True", "中")
+async def e07():
+    srv = FakeFC2Server()
+    srv.add_item("637", stock=1)
+    srv.inject("POST", "/regi", "hook", lambda c: setattr(srv.items["637"], "stock", 0), when=lambda c: "Submit2" in c.form)
+    with fc2_network(srv):
+        res = await new_checkout(dry_run=False).execute_checkout("637", "テスト")
+    expect(not res.get("success") and res.get("is_soldout") is True,
+           f"最终确认提交时返回『カートにある商品が売り切れました』，但 execute_checkout 返回 is_soldout={res.get('is_soldout')}, msg={res.get('message')}。\n"
+           "        原因: execute_checkout 在第 4 步结尾硬编码了 'is_soldout': False。\n"
+           "        后果: 调用方拿到 is_soldout=False，不能直接通过该字段获知商品已在最后一步售罄。")
 
 
 # =========================================================================
@@ -1309,6 +1424,51 @@ async def f11():
     async with sim_bot(srv, order={"worker_retries": 5}) as bot:
         await run_worker(bot, make_item("728"))
         expect("728" in bot.simulated_item_ids, "429 后未能恢复" + tail(bot))
+
+
+@case("F12", "并发机制", "[实盘] max_orders=1 时 2 款重点商品同时开售：严禁并发竞态下出 2 单 (超买风险)", "致命")
+async def f12():
+    srv = FakeFC2Server()
+    srv.add_item("731", stock=3)
+    srv.add_item("732", stock=3)
+    # 模拟真实服务器处理完订单后响应在网络上传输 0.15s 才回到客户端
+    srv.inject("POST", "/regi", "process_then_delay", 0.15, times=2, when=lambda c: "Submit2" in c.form)
+    async with sim_bot(srv, order={"dry_run": False, "max_orders": 1, "max_concurrent_workers": 3}) as bot:
+        bot.upcoming_items["731"] = {"item_id": "731", "title": "ドール731", "url": f"{BASE}/ca13/731/"}
+        bot.upcoming_items["732"] = {"item_id": "732", "title": "ドール732", "url": f"{BASE}/ca13/732/"}
+        bot.trigger_maintenance_direct_orders()
+        tasks = [t for t in bot.active_order_tasks.values() if t]
+        bot._sim_tasks.extend(tasks)
+        if tasks:
+            await asyncio.wait(tasks, timeout=5.0)
+        expect(len(srv.orders) == 1 and len(bot.purchased_item_ids) == 1,
+               f"用户设定 max_orders=1 (最多只买 1 款)，但服务器实际生成了 {len(srv.orders)} 个真实订单: "
+               f"{[(o['order_id'], o['items']) for o in srv.orders]}。\n"
+               "        原因: dispatch_order_worker 和 _run_order_worker 只在下单完成时才写入 purchased_item_ids，"
+               "没有任何『在途名额预占』或『最终提交互斥锁』；2 个并发线程启动时都看到 len(purchased_item_ids)==0 < 1，在真实网络延迟下同时发出 Submit2 完成结账。\n"
+               "        后果: 用户监控多款候选娃、只想买最先抢到的 1 款时，实盘会同时买下多款，造成超额支付。" + tail(bot))
+
+
+@case("F13", "并发机制", "全量货架同步 (sync_full_catalog) 遇单页/分页 503：不能把已锁定的预计上线商品抹除", "高")
+async def f13():
+    srv = FakeFC2Server()
+    # 构造 21 个商品（分 2 页：page 0 有 20 个在售商品，page 1 有 1 个预计上线重点商品 799）
+    for idx in range(1, 21):
+        srv.add_item(f"{800 + idx}", stock=1)
+    srv.add_item("799", upcoming=True)
+    async with sim_bot(srv) as bot:
+        bot.upcoming_items["799"] = {"item_id": "799", "title": "ドール799", "url": f"{BASE}/ca13/799/", "is_upcoming": True}
+        # 模拟全量同步时某页或整体只返回了前 20 个在售商品，未含 799
+        orig_scan = bot.monitor.scan_full_catalog
+        async def _partial_scan(max_pages: int = 25):
+            all_it = await orig_scan(max_pages=max_pages)
+            return [it for it in all_it if it.item_id != "799"]
+        bot.monitor.scan_full_catalog = _partial_scan
+        await bot.sync_full_catalog()
+        expect("799" in bot.upcoming_items,
+               f"全量同步漏掉某页后，原先已锁定的预计上线商品 799 从 upcoming_items 中被彻底抹除 (当前 upcoming_items={list(bot.upcoming_items.keys())})。\n"
+               "        原因: sync_full_catalog 直接执行 self.upcoming_items = upcoming_dict 全量覆盖，而不是合并保留尚未售罄/未购买的已知预告商品。\n"
+               "        后果: 定时同步或手动刷新时只要某一页因网络抖动失败，该页上的待抢新品就会丢失专属监控与预热连接。")
 
 
 # =========================================================================
