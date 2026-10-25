@@ -987,19 +987,28 @@ class BotEngine:
     # =========================================================================
     async def manual_test_checkout(self, item_id: str, custom_title: str = "测试商品") -> Dict[str, Any]:
         """Runs an on-demand checkout test (always respects dry_run setting, default True)"""
-        self.log("INFO", f"🧪 用户手动发起测试下单: ID={item_id} (模拟模式={self.config.get('order', {}).get('dry_run', True)})")
+        order_cfg = self.config.get("order", {})
+        dry_run = bool(order_cfg.get("dry_run", True))
+        action_name = "模拟测试" if dry_run else "⚡ 实盘真实"
+        self.log("INFO", f"🧪 用户手动发起{action_name}下单: ID={item_id} (模拟模式={dry_run})")
+        session_retries = int(order_cfg.get("session_retries", order_cfg.get("retry_count", 3)))
+        session_retry_delay = float(order_cfg.get("session_retry_delay", order_cfg.get("retry_delay_seconds", 0.15)))
+        quantity = int(order_cfg.get("quantity", 1))
         checkout = FC2Checkout(
             base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
             buyer_info=self.config.get("buyer", {}),
-            dry_run=self.config.get("order", {}).get("dry_run", True),
-            retry_count=self.config.get("order", {}).get("retry_count", 3),
-            retry_delay=self.config.get("order", {}).get("retry_delay_seconds", 0.3)
+            dry_run=dry_run,
+            retry_count=session_retries,
+            retry_delay=session_retry_delay
         )
-        res = await checkout.execute_checkout(
-            item_id=item_id,
-            item_title=custom_title,
-            quantity=1
-        )
+        try:
+            res = await checkout.execute_checkout(
+                item_id=item_id,
+                item_title=custom_title,
+                quantity=quantity
+            )
+        finally:
+            await checkout.close()
         self.order_history.insert(0, res)
-        self.log("ORDER" if res.get("success") else "WARN", f"手动测试结果: {res.get('message')}")
+        self.log("ORDER" if res.get("success") else "WARN", f"手动{action_name}下单结果: {res.get('message')}")
         return res

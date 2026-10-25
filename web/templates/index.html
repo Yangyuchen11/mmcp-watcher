@@ -1,15 +1,19 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MamaChapp FC2 监控与自动下单工具</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css?v=3.5">
   <link rel="icon" type="image/x-icon" href="https://cart.fc2img.com/favicon.ico">
 </head>
+
 <body>
   <div class="app-layout">
     <!-- Top Navigation Header -->
@@ -18,7 +22,8 @@
         <div class="brand-icon">🧸</div>
         <div class="brand-text">
           <h1>MamaChapp FC2 <span>Watcher & Order Bot</span></h1>
-          <p class="target-sub">目标: <a href="https://mamachapptoy.cart.fc2.com/?sort=5" target="_blank" rel="noopener">mamachapptoy.cart.fc2.com</a></p>
+          <p class="target-sub">目标: <a href="https://mamachapptoy.cart.fc2.com/?sort=5" target="_blank"
+              rel="noopener">mamachapptoy.cart.fc2.com</a></p>
         </div>
       </div>
 
@@ -46,7 +51,8 @@
 
     <!-- Pre-release Maintenance Alert Banner -->
     <div id="maintenance-alert-banner" class="maintenance-alert-banner" style="display:none;">
-      🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（<span id="banner-rush-interval">0.8</span>s），开售后毫秒级抢购！
+      🚨 <b>【发售前维护中】</b> 检测到 Mamachapp 商城进入维护中！通常几分钟后维护结束即刻上架新品！监控已自动开启最高警戒极速轮询（<span
+        id="banner-rush-interval">0.8</span>s），开售后毫秒级抢购！
     </div>
 
     <!-- Active Concurrent Orders Live Banner -->
@@ -141,7 +147,8 @@
               <p>涵盖商城全部分页商品（当前已同步 <span id="catalog-total-indicator">239</span> 款），按官方最新修改时间降序排列，支持任意商品下单测试</p>
             </div>
             <div class="pane-tools">
-              <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="重新扫描并同步商城全部分页的所有在售与预告商品（自动适应总页数）">🔄 刷新全量商品</button>
+              <button id="btn-sync-catalog" class="btn-xs btn-ghost" title="重新扫描并同步商城全部分页的所有在售与预告商品（自动适应总页数）">🔄
+                刷新全量商品</button>
             </div>
           </div>
 
@@ -151,14 +158,19 @@
               <div class="search-box-wrapper">
                 <span class="search-icon">🔍</span>
                 <input type="text" id="catalog-filter" placeholder="筛选商品名称、ID或关键字..." class="filter-input search-input">
-                <button type="button" id="btn-clear-filter" class="btn-clear-search" title="清空搜索" style="display:none;">✕</button>
+                <button type="button" id="btn-clear-filter" class="btn-clear-search" title="清空搜索"
+                  style="display:none;">✕</button>
               </div>
 
               <div class="stock-filter-group">
-                <button type="button" class="stock-pill active" data-stock="all">全部 <span class="pill-badge" id="count-all">0</span></button>
-                <button type="button" class="stock-pill" data-stock="instock">仅看有货 <span class="pill-badge instock" id="count-instock">0</span></button>
-                <button type="button" class="stock-pill upcoming-pill" data-stock="upcoming">📅 预计上线 <span class="pill-badge upcoming" id="count-upcoming">0</span></button>
-                <button type="button" class="stock-pill" data-stock="soldout">仅看售罄 <span class="pill-badge soldout" id="count-soldout">0</span></button>
+                <button type="button" class="stock-pill active" data-stock="all">全部 <span class="pill-badge"
+                    id="count-all">0</span></button>
+                <button type="button" class="stock-pill" data-stock="instock">仅看有货 <span class="pill-badge instock"
+                    id="count-instock">0</span></button>
+                <button type="button" class="stock-pill upcoming-pill" data-stock="upcoming">📅 预计上线 <span
+                    class="pill-badge upcoming" id="count-upcoming">0</span></button>
+                <button type="button" class="stock-pill" data-stock="soldout">仅看售罄 <span class="pill-badge soldout"
+                    id="count-soldout">0</span></button>
               </div>
 
               <div class="page-size-wrap">
@@ -368,7 +380,8 @@
                     <input type="number" id="cfg-scan-pages" min="1" value="2">
                   </div>
                   <div class="form-group">
-                    <label for="cfg-auto-rush-duration" title="开售/维护结束自动触发极速突击的持续时间（秒）。若在此时间内检测到所有扫描深度内的商品已售罄，也将提前安全退出极速模式">开售自动极速持续 (秒)</label>
+                    <label for="cfg-auto-rush-duration"
+                      title="开售/维护结束自动触发极速突击的持续时间（秒）。若在此时间内检测到所有扫描深度内的商品已售罄，也将提前安全退出极速模式">开售自动极速持续 (秒)</label>
                     <input type="number" id="cfg-auto-rush-duration" min="10" max="600" step="5" value="60">
                   </div>
                 </div>
@@ -377,7 +390,9 @@
                 <div class="sub-config-block">
                   <div class="sub-block-header">
                     <div class="block-title-row">
-                      <span class="config-block-badge" style="background: rgba(147, 51, 234, 0.16); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.32);">🎯 优先检测</span>
+                      <span class="config-block-badge"
+                        style="background: rgba(147, 51, 234, 0.16); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.32);">🎯
+                        优先检测</span>
                       <h5 class="config-block-title" style="font-size: 0.86rem;">优先商品独立详情页检测设置</h5>
                     </div>
                     <p class="config-block-desc">
@@ -391,7 +406,8 @@
                       <input type="number" id="cfg-priority-interval" step="0.1" min="0.1" value="0.5">
                     </div>
                     <div class="form-group">
-                      <label for="cfg-priority-rush-interval" title="极速模式下每个优先商品独立详情页的检测间隔（建议 0.2~0.5秒，完全由您自主设定）">优先极速间隔 (秒)</label>
+                      <label for="cfg-priority-rush-interval" title="极速模式下每个优先商品独立详情页的检测间隔（建议 0.2~0.5秒，完全由您自主设定）">优先极速间隔
+                        (秒)</label>
                       <input type="number" id="cfg-priority-rush-interval" step="0.05" min="0.05" value="0.3">
                     </div>
                   </div>
@@ -407,18 +423,21 @@
                       </div>
                     </div>
                     <div class="form-group">
-                      <label for="cfg-priority-hedge-delay" title="主探测请求发送后超过多少秒未响应则启动并发对冲探针（此时主探测继续在队列排队等待，建议 1.0~2.0 秒）">详情页对冲阈值 (秒)</label>
+                      <label for="cfg-priority-hedge-delay"
+                        title="主探测请求发送后超过多少秒未响应则启动并发对冲探针（此时主探测继续在队列排队等待，建议 1.0~2.0 秒）">详情页对冲阈值 (秒)</label>
                       <input type="number" id="cfg-priority-hedge-delay" step="0.1" min="0.1" value="1.5">
                     </div>
                   </div>
 
                   <div class="form-row">
                     <div class="form-group">
-                      <label for="cfg-priority-timeout" title="基础主探测请求的最长排队超时（在此时间内保持排队不中断，超出后才重置主请求）">主探测超时防护 (秒)</label>
+                      <label for="cfg-priority-timeout" title="基础主探测请求的最长排队超时（在此时间内保持排队不中断，超出后才重置主请求）">主探测超时防护
+                        (秒)</label>
                       <input type="number" id="cfg-priority-timeout" step="0.5" min="0.5" value="4.0">
                     </div>
                     <div class="form-group">
-                      <label for="cfg-priority-hedge-timeout" title="对冲探针自身的独立超时上限（若对冲探针在此秒数内未完成，仅重置并重启对冲探针，完全不影响正在排队的主探测）">对冲进程超时防护 (秒)</label>
+                      <label for="cfg-priority-hedge-timeout"
+                        title="对冲探针自身的独立超时上限（若对冲探针在此秒数内未完成，仅重置并重启对冲探针，完全不影响正在排队的主探测）">对冲进程超时防护 (秒)</label>
                       <input type="number" id="cfg-priority-hedge-timeout" step="0.5" min="0.5" value="2.0">
                     </div>
                   </div>
@@ -455,11 +474,13 @@
 
                 <div class="form-row">
                   <div class="form-group">
-                    <label for="cfg-session-retries" title="加购成功后，若结算遭遇 502/503 或超时，在保持购物车 Cookie 的前提下就地极速重试的次数">保持购物车重试次数</label>
+                    <label for="cfg-session-retries"
+                      title="加购成功后，若结算遭遇 502/503 或超时，在保持购物车 Cookie 的前提下就地极速重试的次数">保持购物车重试次数</label>
                     <input type="number" id="cfg-session-retries" min="1" value="3">
                   </div>
                   <div class="form-group">
-                    <label for="cfg-session-retry-delay" title="保持购物车会话内的快速重试间隔时间（秒，建议 0.05~0.2 秒）">保持购物车重试间隔 (秒)</label>
+                    <label for="cfg-session-retry-delay" title="保持购物车会话内的快速重试间隔时间（秒，建议 0.05~0.2 秒）">保持购物车重试间隔
+                      (秒)</label>
                     <input type="number" id="cfg-session-retry-delay" step="0.05" min="0.01" value="0.15">
                   </div>
                 </div>
@@ -494,10 +515,11 @@
                 <div class="form-row">
                   <div class="form-group" style="flex: 1 1 100%;">
                     <label>维护结束瞬时直发加购</label>
-                    <div class="checkbox-control-box" title="开启后，在商城维护结束的瞬间，无需等待详情页加载，直接对所有预计上线与重点商品并行发起加购下单线程！页面详情监控将同步进行，并在读取到售罄或抢购成功后自动停止尝试。">
+                    <div class="checkbox-control-box"
+                      title="开启后，在商城维护结束的瞬间，无需等待详情页加载，直接对所有预计上线与重点商品并行发起加购下单线程！页面详情监控将同步进行，并在读取到售罄或抢购成功后自动停止尝试。">
                       <label for="chk-maintenance-direct-order">
                         <input type="checkbox" id="chk-maintenance-direct-order" checked>
-                        <span>⚡ 维护结束瞬间直接触发加购（无视页面状态直发下单，售罄/买到即止）</span>
+                        <span>⚡ 直发加购</span>
                       </label>
                     </div>
                   </div>
@@ -572,4 +594,5 @@
 
   <script src="/static/js/app.js?v=3.5"></script>
 </body>
+
 </html>
