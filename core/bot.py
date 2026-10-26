@@ -1027,6 +1027,11 @@ class BotEngine:
         # 0. Acquire pre-warmed checkouts if available (zero handshake latency!)
         prewarmed_primary = self._pop_prewarmed_checkout(item_id, "primary")
         prewarmed_hedge = self._pop_prewarmed_checkout(item_id, "hedge")
+        worker_checkout_pool: Dict[str, FC2Checkout] = {}
+        if prewarmed_primary and not prewarmed_primary.client.is_closed:
+            worker_checkout_pool["primary"] = prewarmed_primary
+        if prewarmed_hedge and not prewarmed_hedge.client.is_closed:
+            worker_checkout_pool["hedge_1"] = prewarmed_hedge
 
         # Per-worker final submission lock so primary + hedge never double-submit Submit2 for the same item
         worker_final_lock = asyncio.Lock()
@@ -1034,14 +1039,17 @@ class BotEngine:
 
         async def _single_attempt(
             label: str,
-            prewarmed_checkout: Optional[FC2Checkout] = None,
-            chk_holder: Optional[List[FC2Checkout]] = None
+            pool_key: str = "primary",
+            chk_holder: Optional[List[FC2Checkout]] = None,
+            is_first_use: bool = False
         ) -> Dict[str, Any]:
             nonlocal worker_final_active_or_done
-            used_prewarm = prewarmed_checkout is not None and not prewarmed_checkout.client.is_closed
-            if used_prewarm:
-                checkout = prewarmed_checkout
-                self.log("ORDER", f"♨️ [{label}] 启用已预热完成的独立 TLS 1.3 长连接通道！0ms握手耗时直接发射加购: [{item.title}] (ID: {item_id})")
+            existing_chk = worker_checkout_pool.get(pool_key)
+            if existing_chk is not None and not existing_chk.client.is_closed:
+                checkout = existing_chk
+                checkout.reset_for_next_attempt()
+                if is_first_use and checkout.is_warmed:
+                    self.log("ORDER", f"♨️ [{label}] 启用已预热完成的独立 TLS 1.3 长连接通道！0ms握手耗时直接发射加购: [{item.title}] (ID: {item_id})")
             else:
                 checkout = FC2Checkout(
                     base_url=self.config.get("shop", {}).get("base_url", "https://mamachapptoy.cart.fc2.com"),
@@ -1050,6 +1058,7 @@ class BotEngine:
                     retry_count=session_retries,
                     retry_delay=session_retry_delay
                 )
+                worker_checkout_pool[pool_key] = checkout
             # Ensure runtime config values are bound
             checkout.dry_run = dry_run
             checkout.retry_count = session_retries
@@ -1061,6 +1070,7 @@ class BotEngine:
             self.active_checkouts.setdefault(item_id, []).append(checkout)
 
             reserved_final_slot = False
+            was_cancelled = False
 
             async def _before_final_submit_gate() -> bool:
                 nonlocal worker_final_active_or_done, reserved_final_slot
@@ -1101,9 +1111,13 @@ class BotEngine:
                     item_id=item_id,
                     item_title=item.title,
                     item_url=item.url,
-                    quantity=quantity
+                    quantity=quantity,
+                    close_on_finish=False
                 )
                 return attempt_res
+            except asyncio.CancelledError:
+                was_cancelled = True
+                raise
             finally:
                 succeeded = bool(attempt_res and attempt_res.get("success"))
                 if not succeeded:
@@ -1120,7 +1134,9 @@ class BotEngine:
                 chk_list = self.active_checkouts.get(item_id)
                 if chk_list and checkout in chk_list:
                     chk_list.remove(checkout)
-                await checkout.close()
+                if was_cancelled:
+                    worker_checkout_pool.pop(pool_key, None)
+                    await checkout.close()
 
         try:
             sem = self._get_semaphore()
@@ -1141,7 +1157,6 @@ class BotEngine:
                     self.active_orders_status[item_id]["status"] = f"加购/提交中 (轮次 {attempt}/{max_worker_retries})"
 
                 res: Optional[Dict[str, Any]] = None
-                primary_checkout_arg = prewarmed_primary if attempt == 1 else None
 
                 # Acquire semaphore per attempt and release before retry sleep so 4+ items never starve!
                 async with sem:
@@ -1151,14 +1166,14 @@ class BotEngine:
                         return
 
                     if not hedge_enabled:
-                        res = await _single_attempt("主请求", primary_checkout_arg)
+                        res = await _single_attempt("主请求", "primary", is_first_use=(attempt == 1))
                     else:
                         # 🚀 智能进度感知滚动对冲机制 (Progress-Aware Hedged Requests):
                         # 启动主请求线程；若超过 hedge_delay 秒仍未完成加购，保留主连接继续排队并启动对冲探针。
                         # 一旦主请求已完成加购 (steps_completed >= 1) 或进入最终确认阶段 (in_final_stage)，
                         # 绝不盲目切断主请求或滥发探针，全力保护已抢到手的购物车直通结账！
                         t1_holder: List[FC2Checkout] = []
-                        t1 = asyncio.create_task(_single_attempt("主请求", primary_checkout_arg, t1_holder))
+                        t1 = asyncio.create_task(_single_attempt("主请求", "primary", t1_holder, is_first_use=(attempt == 1)))
                         done, pending = await asyncio.wait([t1], timeout=hedge_delay)
 
                         if t1 in done:
@@ -1190,10 +1205,14 @@ class BotEngine:
                                 self.log("INFO", f"⚡ 启动第 {probe_idx} 轮对冲探针冲刺（主线程仍在保持排队等待）...")
                                 if item_id in self.active_orders_status:
                                     self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
-                                hedge_checkout_arg = prewarmed_hedge if probe_idx == 1 else None
                                 current_hedge_holder = []
                                 current_hedge_task = asyncio.create_task(
-                                    _single_attempt(f"对冲探针#{probe_idx}", hedge_checkout_arg, current_hedge_holder)
+                                    _single_attempt(
+                                        f"对冲探针#{probe_idx}",
+                                        f"hedge_{probe_idx}",
+                                        current_hedge_holder,
+                                        is_first_use=(attempt == 1 and probe_idx == 1)
+                                    )
                                 )
 
                                 done2, pending2 = await asyncio.wait(
@@ -1360,6 +1379,12 @@ class BotEngine:
         except Exception as e:
             self.log("ERROR", f"并发下单线程发生异常 [{item.title}]: {e}")
         finally:
+            for pooled_chk in list(worker_checkout_pool.values()):
+                try:
+                    await pooled_chk.close()
+                except Exception:
+                    pass
+            worker_checkout_pool.clear()
             self._cleanup_order_task(item_id, current_worker_task)
 
     # =========================================================================

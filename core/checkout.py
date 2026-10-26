@@ -49,6 +49,21 @@ class FC2Checkout:
         self.in_final_stage: bool = False
         self.final_submitted: bool = False
         self.before_final_submit: Optional[Callable[[], Any]] = None
+        self._cached_confirm_html: Optional[str] = None
+        self._cached_confirm_soup: Optional[BeautifulSoup] = None
+
+    def reset_for_next_attempt(self):
+        """
+        Resets FC2 session cookies and step state for a fresh checkout attempt while
+        preserving the underlying TCP + TLS 1.3 Keep-Alive connection pool (0ms handshake!).
+        """
+        if self.client and not self.client.is_closed:
+            self.client.cookies.clear()
+        self.steps_completed = 0
+        self.in_final_stage = False
+        self.final_submitted = False
+        self._cached_confirm_html = None
+        self._cached_confirm_soup = None
 
     async def warm_up(self, target_url: Optional[str] = None) -> bool:
         """
@@ -126,11 +141,45 @@ class FC2Checkout:
         return radios[0].get("value", "")
 
     @staticmethod
+    def _crop_checkout_region(html: str, strip_prefecture_select: bool = False) -> str:
+        """
+        Crops HTML to the main checkout/confirmation container and strips #sidemenu/#footer
+        so BeautifulSoup only parses the form region instead of the full 35KB storefront template.
+        """
+        idx = -1
+        for marker in ('id="checkout_page"', "id='checkout_page'", 'id="confirm_page"', "id='confirm_page'", 'id="checkout_confirm_page"'):
+            idx = html.find(marker)
+            if idx != -1:
+                break
+        if idx != -1:
+            start = html.rfind("<div", 0, idx)
+            if start == -1:
+                start = idx
+            end = html.find('id="sidemenu"', idx)
+            if end == -1:
+                end = html.find('id="footer"', idx)
+            region = html[start:end] if end != -1 else html[start:]
+        else:
+            region = html
+
+        if strip_prefecture_select and "address[in][ken]" in region:
+            region = re.sub(
+                r'<select[^>]*name=["\']address\[in\]\[ken\]["\'][^>]*>.*?</select>',
+                "",
+                region,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        return region
+
+    @staticmethod
     def _is_cart_soldout(html: str) -> bool:
         """
         Checks if a cart response indicates genuine out-of-stock without false-flagging
         products whose title contains '完売' (e.g. '【完売御礼・再販】...').
         """
+        if not html or not any(kw in html for kw in ("在庫切れ", "売り切れ", "完売", "品切れ", "售罄")):
+            return False
+
         explicit_phrases = [
             "在庫切れのため", "在庫切れ（", "在庫切れとな", "カートに入れることができません",
             "売り切れました", "品切れのため", "現在、在庫切れ"
@@ -274,7 +323,8 @@ class FC2Checkout:
                 if "カートに商品は入っていません" in html or (resp.url and resp.url.path == "/check"):
                     return False, None, "结算失败：购物车已空或会话丢失"
 
-                soup = BeautifulSoup(html, "html.parser")
+                region_html = self._crop_checkout_region(html, strip_prefecture_select=True)
+                soup = BeautifulSoup(region_html, "html.parser")
                 form = self._select_checkout_form(soup)
 
                 if not form:
@@ -311,10 +361,12 @@ class FC2Checkout:
 
                 # Layer 1: Semantic Table Row Inspection (based on label text like '配送方法', 'お支払い方法')
                 for tr in form.find_all("tr"):
-                    header_cell = tr.find(["td", "th"])
-                    label_text = header_cell.get_text(strip=True) if header_cell else ""
                     sel = tr.find("select")
                     radios = tr.find_all("input", type="radio")
+                    if not sel and not radios:
+                        continue
+                    header_cell = tr.find(["td", "th"])
+                    label_text = header_cell.get_text(strip=True) if header_cell else ""
 
                     if "支払" in label_text:
                         if sel and not form_ctx["payment_method"]:
@@ -554,7 +606,8 @@ class FC2Checkout:
                 if "カートに商品は入っていません" in html or (resp.url and resp.url.path == "/check"):
                     return False, None, f"提交收件信息失败：购物车已空或会话丢失 ({elapsed_ms}ms)"
 
-                soup = BeautifulSoup(html, "html.parser")
+                region_html = self._crop_checkout_region(html)
+                soup = BeautifulSoup(region_html, "html.parser")
                 err_box = soup.select_one(".errormessage, .error")
                 if err_box and err_box.get_text(strip=True):
                     return False, None, f"表单校验错误: {err_box.get_text(strip=True)}"
@@ -582,6 +635,8 @@ class FC2Checkout:
                     return False, None, last_error
 
                 self.steps_completed = max(self.steps_completed, 3)
+                self._cached_confirm_html = html
+                self._cached_confirm_soup = soup
                 prefix = f"[重试第{attempt}次成功] " if attempt > 1 else ""
                 return True, html, f"{prefix}收件信息提交成功 ({elapsed_ms}ms)"
             except Exception as e:
@@ -612,7 +667,10 @@ class FC2Checkout:
         Step 3: Confirm and finalize order
         Extracts form fields from the confirmation page and sends final POST
         """
-        soup = BeautifulSoup(confirmation_html, "html.parser")
+        if self._cached_confirm_soup is not None and self._cached_confirm_html == confirmation_html:
+            soup = self._cached_confirm_soup
+        else:
+            soup = BeautifulSoup(self._crop_checkout_region(confirmation_html), "html.parser")
         form = self._select_checkout_form(soup)
 
         if not form:
@@ -699,7 +757,7 @@ class FC2Checkout:
                     }
 
                 res_html = resp.text
-                err_soup = BeautifulSoup(res_html, "html.parser")
+                err_soup = BeautifulSoup(self._crop_checkout_region(res_html), "html.parser")
                 # Strip all HTML comments so template comments like <!-- 注文完了ページ --> never false-match!
                 for c in err_soup.find_all(string=lambda t: isinstance(t, Comment)):
                     c.extract()
@@ -786,7 +844,8 @@ class FC2Checkout:
         item_id: str,
         item_title: str,
         item_url: Optional[str] = None,
-        quantity: int = 1
+        quantity: int = 1,
+        close_on_finish: bool = True
     ) -> Dict[str, Any]:
         """
         Orchestrates full checkout flow:
@@ -802,7 +861,8 @@ class FC2Checkout:
         cart_ok, cart_msg = await self.add_to_cart(item_id, item_url, quantity)
         timeline.append(f"加购: {cart_msg}")
         if not cart_ok:
-            await self.close()
+            if close_on_finish:
+                await self.close()
             is_soldout = any(k in cart_msg for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
@@ -819,7 +879,8 @@ class FC2Checkout:
         regi_ok, form_ctx, regi_err = await self.get_regi_form()
         if not regi_ok or not form_ctx:
             timeline.append(f"获取结算表单失败: {regi_err}")
-            await self.close()
+            if close_on_finish:
+                await self.close()
             is_soldout = any(k in str(regi_err) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
@@ -840,7 +901,8 @@ class FC2Checkout:
         info_ok, confirm_html, info_msg = await self.submit_regi_info(form_ctx)
         timeline.append(f"提交订单信息: {info_msg}")
         if not info_ok or not confirm_html:
-            await self.close()
+            if close_on_finish:
+                await self.close()
             is_soldout = any(k in str(info_msg) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"])
             return {
                 "success": False,
@@ -856,7 +918,8 @@ class FC2Checkout:
         # 4. Final confirmation / Dry-run
         final_res = await self.confirm_final_order(confirm_html)
         timeline.append(f"订单确认: {final_res.get('message')}")
-        await self.close()
+        if close_on_finish:
+            await self.close()
 
         final_soldout = bool(final_res.get("is_soldout", False)) or any(
             k in str(final_res.get("message", "")) for k in ["在庫切れ", "売り切れ", "品切れ", "完売", "售罄"]
