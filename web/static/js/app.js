@@ -27,7 +27,18 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(fetchStatus, 2000);
 });
 
-// Tab Switching
+// Tab Switching & Sidebar Height Sync for Logs Panel
+function syncSidebarHeight() {
+  const sidebar = document.querySelector(".sidebar-column");
+  const mainContent = document.querySelector(".main-content");
+  if (sidebar && mainContent) {
+    const h = sidebar.offsetHeight;
+    if (h > 200) {
+      mainContent.style.setProperty("--sidebar-height", `${h}px`);
+    }
+  }
+}
+
 function initTabs() {
   const tabs = document.querySelectorAll(".tab-btn");
   tabs.forEach(btn => {
@@ -36,6 +47,14 @@ function initTabs() {
       switchToTab(targetId);
     });
   });
+
+  syncSidebarHeight();
+  const sidebar = document.querySelector(".sidebar-column");
+  if (sidebar && typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => syncSidebarHeight());
+    ro.observe(sidebar);
+  }
+  window.addEventListener("resize", syncSidebarHeight);
 }
 
 function switchToTab(targetId) {
@@ -47,6 +66,21 @@ function switchToTab(targetId) {
   const targetPane = document.getElementById(targetId);
   if (targetBtn) targetBtn.classList.add("active");
   if (targetPane) targetPane.classList.add("active");
+
+  const primaryCol = document.querySelector(".primary-column");
+  if (primaryCol) {
+    primaryCol.classList.toggle("logs-tab-active", targetId === "tab-logs");
+  }
+  if (targetId === "tab-logs") {
+    syncSidebarHeight();
+    const autoScroll = document.getElementById("chk-auto-scroll");
+    const termBox = document.getElementById("terminal-logs");
+    if (termBox && (!autoScroll || autoScroll.checked)) {
+      requestAnimationFrame(() => {
+        termBox.scrollTop = termBox.scrollHeight;
+      });
+    }
+  }
 }
 
 // Event Handlers for Header and Actions
