@@ -137,6 +137,10 @@
             <span class="tab-icon">👤</span>
             <span>下单收件信息</span>
           </button>
+          <button class="tab-btn" data-tab="tab-security" id="btn-tab-security">
+            <span class="tab-icon">🔐</span>
+            <span>登录密码设置</span>
+          </button>
         </div>
 
         <!-- Tab 1: Catalog -->
@@ -157,7 +161,7 @@
             <div class="catalog-filters-row">
               <div class="search-box-wrapper">
                 <span class="search-icon">🔍</span>
-                <input type="text" id="catalog-filter" placeholder="筛选商品名称、ID或关键字..." class="filter-input search-input">
+                <input type="search" id="catalog-filter" name="catalog_search_keyword" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other" placeholder="筛选商品名称、ID或关键字..." class="filter-input search-input">
                 <button type="button" id="btn-clear-filter" class="btn-clear-search" title="清空搜索"
                   style="display:none;">✕</button>
               </div>
@@ -315,6 +319,126 @@
             </div>
           </div>
         </div>
+
+        <!-- Tab 5: Security & Password Settings (登录密码与访问安全) -->
+        <div class="tab-pane" id="tab-security">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h3>🔐 控制面板登录密码与公网安全设置</h3>
+              <p>修改公网访问密码及已认证 IP 免密白名单。修改后永久保存至配置文件，后续该 IP 无需重复输入密码。</p>
+            </div>
+            <div class="pane-tools">
+              <button class="btn-sm btn-primary" id="btn-save-pwd-top">💾 保存密码设置</button>
+            </div>
+          </div>
+
+          <div class="buyer-form-layout">
+            <!-- Warning Banner if using default password -->
+            <div id="sec-default-pwd-alert" class="sec-alert-banner warning" style="display:none;">
+              ⚠️ <b>安全提示:</b> 当前控制面板仍在运行在初始默认密码 <code>987654321</code> 下，建议在公网部署时尽快修改为您自拟的高强度私有密码！
+            </div>
+
+            <!-- Card 1: 访问密码修改 -->
+            <div class="config-block">
+              <div class="config-block-header">
+                <div class="block-title-row">
+                  <span class="config-block-badge"
+                    style="background: rgba(59, 130, 246, 0.16); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);">🔑
+                    访问密码</span>
+                  <h5 class="config-block-title">修改控制面板访问密码</h5>
+                </div>
+                <p class="config-block-desc">设定进入本面板所需的校验密码，默认密码为 987654321，设定后永久写入配置文件 config.json</p>
+              </div>
+
+              <div class="config-block-body">
+                <form autocomplete="off" onsubmit="return false;" style="max-width: 520px; display: flex; flex-direction: column; gap: 14px;">
+                  <div class="form-group">
+                    <label for="sec-current-pwd">原访问密码</label>
+                    <div class="pwd-input-wrap">
+                      <input type="password" id="sec-current-pwd" autocomplete="current-password" placeholder="默认: 987654321">
+                      <button type="button" class="btn-eye-toggle" data-target="sec-current-pwd"
+                        title="显示/隐藏密码">👁️</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="sec-new-pwd">新访问密码 (至少 4 位字符)</label>
+                    <div class="pwd-input-wrap">
+                      <input type="password" id="sec-new-pwd" autocomplete="new-password" placeholder="请输入新访问密码">
+                      <button type="button" class="btn-eye-toggle" data-target="sec-new-pwd"
+                        title="显示/隐藏密码">👁️</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="sec-confirm-pwd">确认新密码</label>
+                    <div class="pwd-input-wrap">
+                      <input type="password" id="sec-confirm-pwd" autocomplete="new-password" placeholder="请再次输入新访问密码">
+                      <button type="button" class="btn-eye-toggle" data-target="sec-confirm-pwd"
+                        title="显示/隐藏密码">👁️</button>
+                    </div>
+                  </div>
+
+                  <div style="margin-top: 4px;">
+                    <button class="btn btn-primary" id="btn-submit-change-pwd"
+                      style="height: 38px; padding: 0 24px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;">
+                      <span>💾 保存修改后的密码</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <!-- Card 2: IP 免密授权与白名单管理 -->
+            <div class="config-block">
+              <div class="config-block-header">
+                <div class="block-title-row">
+                  <span class="config-block-badge"
+                    style="background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);">🌐
+                    IP 免密白名单</span>
+                  <h5 class="config-block-title">已登录 IP 永久免密记录</h5>
+                </div>
+                <p class="config-block-desc">已成功登录的客户端 IP 将被永久记住保存在配置文件中，后续访问无需重复输入密码</p>
+              </div>
+
+              <div class="config-block-body">
+                <!-- Current IP Status Strip -->
+                <div class="current-ip-status-strip">
+                  <div class="ip-info-left">
+                    <span class="ip-pulse-dot"></span>
+                    <span>当前您的公网 IP: <strong id="sec-current-ip-display">检测中...</strong></span>
+                    <span id="sec-ip-auth-badge" class="badge badge-success" style="font-size:0.75rem;">已免密认证</span>
+                  </div>
+                  <button id="btn-logout-ip" class="btn-xs btn-ghost" title="清除当前 IP 免密并退出到登录页进行测试">
+                    🚪 解除当前 IP 并重新登录测试
+                  </button>
+                </div>
+
+                <!-- Add IP Bar -->
+                <div class="form-group" style="max-width: 520px; margin-top: 14px;">
+                  <label for="sec-input-manual-ip">手动追加免密 IP 地址</label>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="text" id="sec-input-manual-ip" placeholder="例如: 123.45.67.89" style="flex: 1; height: 38px;">
+                    <button class="btn btn-secondary" id="btn-add-manual-ip" style="height: 38px; padding: 0 18px; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;">
+                      ➕ 添加免密
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Remembered IP List Table / Chips -->
+                <div style="margin-top: 10px;">
+                  <label
+                    style="display:block; font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom: 8px;">
+                    已记录的永久免密 IP 列表 (<span id="sec-ip-count">0</span> 个):
+                  </label>
+                  <div id="sec-ip-chips-container" class="sec-ip-chips-container">
+                    <!-- Injected dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Right Column: Split Panels -->
@@ -380,8 +504,8 @@
                     <input type="number" id="cfg-scan-pages" min="1" value="2">
                   </div>
                   <div class="form-group">
-                    <label for="cfg-auto-rush-duration"
-                      title="开售/维护结束自动触发极速突击的持续时间（秒），达到设定时间后自动恢复日常巡检">开售自动极速持续 (秒)</label>
+                    <label for="cfg-auto-rush-duration" title="开售/维护结束自动触发极速突击的持续时间（秒），达到设定时间后自动恢复日常巡检">开售自动极速持续
+                      (秒)</label>
                     <input type="number" id="cfg-auto-rush-duration" min="10" max="600" step="5" value="60">
                   </div>
                 </div>

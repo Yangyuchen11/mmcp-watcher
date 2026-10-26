@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>控制面板安全登录 - MamaChapp FC2 Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.9">
+  <link rel="icon" type="image/x-icon" href="https://cart.fc2img.com/favicon.ico">
+  <style>
+    /* Standalone Login Page Styles */
+    .login-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      position: relative;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 20%, #171d2d 0%, #0a0d14 70%);
+    }
+
+    /* Ambient Glowing Orbs */
+    .ambient-glow {
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      border-radius: 50%;
+      filter: blur(120px);
+      pointer-events: none;
+      opacity: 0.25;
+      z-index: 1;
+    }
+
+    .glow-1 {
+      top: -100px;
+      left: -100px;
+      background: #3b82f6;
+    }
+
+    .glow-2 {
+      bottom: -100px;
+      right: -100px;
+      background: #8b5cf6;
+    }
+
+    /* Login Card */
+    .login-card {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      max-width: 440px;
+      background: rgba(19, 23, 34, 0.78);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      padding: 36px 32px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      animation: cardAppear 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes cardAppear {
+      from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.97);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .login-brand-icon {
+      font-size: 34px;
+      width: 64px;
+      height: 64px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.2));
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+    }
+
+    .login-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 6px;
+      letter-spacing: -0.02em;
+    }
+
+    .login-title span {
+      background: linear-gradient(135deg, #60a5fa 0%, #c084fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .login-subtitle {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* Client IP Badge */
+    .client-ip-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 14px;
+      padding: 5px 12px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 20px;
+      font-size: 0.76rem;
+      font-family: var(--font-mono);
+      color: #94a3b8;
+    }
+
+    .ip-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
+      animation: pulseDot 2s infinite;
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    /* Input Field */
+    .password-input-group {
+      position: relative;
+      margin-bottom: 18px;
+    }
+
+    .password-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .password-input-wrapper input {
+      width: 100%;
+      background: #0e121c;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px 44px 12px 14px;
+      font-size: 0.95rem;
+      color: #fff;
+      font-family: var(--font-mono);
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    .password-input-wrapper input:focus {
+      border-color: #3b82f6;
+      background: #0d1424;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+    }
+
+    .btn-toggle-pwd {
+      position: absolute;
+      right: 12px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s ease;
+    }
+
+    .btn-toggle-pwd:hover {
+      color: #fff;
+    }
+
+    /* Remember IP Option */
+    .remember-ip-option {
+      margin-bottom: 22px;
+      display: flex;
+      align-items: center;
+    }
+
+    .remember-ip-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 0.83rem;
+      color: #cbd5e1;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .remember-ip-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #3b82f6;
+      cursor: pointer;
+    }
+
+    .remember-ip-label strong {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    /* Submit Button */
+    .btn-submit-login {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #3b82f6 0%, #7c3aed 100%);
+      color: #fff;
+      font-size: 0.96rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+      transition: all 0.25s ease;
+    }
+
+    .btn-submit-login:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 26px rgba(124, 58, 237, 0.45);
+      filter: brightness(1.08);
+    }
+
+    .btn-submit-login:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .btn-submit-login:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    /* Error Banner */
+    .login-error-banner {
+      display: none;
+      margin-top: 18px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      font-size: 0.84rem;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .shake-anim {
+      animation: shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
+
+    @keyframes shake {
+      10%, 90% { transform: translate3d(-1px, 0, 0); }
+      20%, 80% { transform: translate3d(2px, 0, 0); }
+      30%, 50%, 70% { transform: translate3d(-3px, 0, 0); }
+      40%, 60% { transform: translate3d(3px, 0, 0); }
+    }
+
+    /* Footer Tips */
+    .login-footer-tip {
+      margin-top: 26px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 0.77rem;
+      color: var(--text-sub);
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .login-footer-tip code {
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 5px;
+      border-radius: 4px;
+      color: #93c5fd;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="login-wrapper">
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+
+    <div class="login-card" id="login-card">
+      <div class="login-header">
+        <div class="login-brand-icon">🧸</div>
+        <h2 class="login-title">MamaChapp FC2 <span>Bot</span></h2>
+        <p class="login-subtitle">公网控制面板安全访问认证</p>
+        <div class="client-ip-pill" title="检测到您的公网访问客户端 IP">
+          <span class="ip-dot"></span>
+          <span>当前客户端 IP: <b id="display-client-ip">{{ client_ip }}</b></span>
+        </div>
+      </div>
+
+      <form id="login-form" onsubmit="handleLoginSubmit(event)">
+        <div class="password-input-group">
+          <label for="login-password" style="display:block; font-size:0.83rem; font-weight:500; color:#e2e8f0; margin-bottom:7px;">访问密码</label>
+          <div class="password-input-wrapper">
+            <input type="password" id="login-password" placeholder="请输入控制面板访问密码" autocomplete="current-password" autofocus required>
+            <button type="button" class="btn-toggle-pwd" id="btn-toggle-pwd" title="显示/隐藏密码">👁️</button>
+          </div>
+        </div>
+
+        <div class="remember-ip-option">
+          <label class="remember-ip-label" title="登录成功后将自动将当前 IP 记入免密白名单，下次访问免输入密码">
+            <input type="checkbox" id="chk-remember-ip" checked>
+            <span>对此 IP 开启<strong>永久免密访问</strong> (推荐)</span>
+          </label>
+        </div>
+
+        <button type="submit" class="btn-submit-login" id="btn-submit">
+          <span id="btn-text">立即解锁并进入面板</span>
+          <span id="btn-spinner" style="display:none;">⏳</span>
+        </button>
+
+        <div class="login-error-banner" id="login-error-banner">
+          <span>❌</span>
+          <span id="login-error-text">密码不正确，请重新输入</span>
+        </div>
+      </form>
+
+      <div class="login-footer-tip">
+        初始默认密码: <code>987654321</code><br>
+        登录后可在「下单收件信息」右侧的「登录密码设置」中进行修改
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Toggle Password Visibility
+    const pwdInput = document.getElementById("login-password");
+    const toggleBtn = document.getElementById("btn-toggle-pwd");
+    toggleBtn.addEventListener("click", () => {
+      if (pwdInput.type === "password") {
+        pwdInput.type = "text";
+        toggleBtn.textContent = "🙈";
+      } else {
+        pwdInput.type = "password";
+        toggleBtn.textContent = "👁️";
+      }
+    });
+
+    // Handle Login Submit
+    async function handleLoginSubmit(e) {
+      e.preventDefault();
+      const pwd = pwdInput.value.trim();
+      if (!pwd) return;
+
+      const rememberIp = document.getElementById("chk-remember-ip").checked;
+      const btn = document.getElementById("btn-submit");
+      const btnText = document.getElementById("btn-text");
+      const btnSpinner = document.getElementById("btn-spinner");
+      const errBanner = document.getElementById("login-error-banner");
+      const errText = document.getElementById("login-error-text");
+      const card = document.getElementById("login-card");
+
+      // UI loading state
+      btn.disabled = true;
+      btnText.textContent = "正在验证授权...";
+      btnSpinner.style.display = "inline";
+      errBanner.style.display = "none";
+      card.classList.remove("shake-anim");
+
+      try {
+        const resp = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password: pwd,
+            remember_ip: rememberIp
+          })
+        });
+
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+          btnText.textContent = "✅ 验证通过，正在进入...";
+          // Redirect to main panel
+          setTimeout(() => {
+            window.location.href = "/";
+          }, 350);
+        } else {
+          btn.disabled = false;
+          btnText.textContent = "立即解锁并进入面板";
+          btnSpinner.style.display = "none";
+          errText.textContent = data.detail || "密码错误，请重新输入";
+          errBanner.style.display = "flex";
+          card.classList.add("shake-anim");
+          pwdInput.focus();
+          pwdInput.select();
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btnText.textContent = "立即解锁并进入面板";
+        btnSpinner.style.display = "none";
+        errText.textContent = "连接服务器失败: " + err.message;
+        errBanner.style.display = "flex";
+        card.classList.add("shake-anim");
+      }
+    }
+  </script>
+</body>
+
+</html>

@@ -1471,6 +1471,160 @@ async def f13():
                "        后果: 定时同步或手动刷新时只要某一页因网络抖动失败，该页上的待抢新品就会丢失专属监控与预热连接。")
 
 
+@case("F14", "并发机制", "单次请求正常快速返回但多次内循环累计超 hedge_delay 时：不误发对冲探针，且日志准确显示重试次数与累计耗时", "高")
+async def f14():
+    srv = FakeFC2Server()
+    srv.add_item("729", stock=0, upcoming=True)  # 尚未开售 -> 每次 POST /cart_in 返回空购物车
+    srv.latency = 0.04  # 每次请求仅 40ms (远小于 hedge_delay=0.20s)，但连跑 8 次累计约 0.40s > hedge_delay
+    async with sim_bot(srv, order={
+        "hedge_requests": True,
+        "hedge_delay": 0.20,
+        "session_retries": 8,
+        "session_retry_delay": 0.01,
+        "worker_retries": 1
+    }) as bot:
+        res = await bot.manual_test_checkout("729", "未开售测试商品")
+        msg = res.get("message", "")
+        expect("重试8次" in msg and "累计" in msg and "末次" in msg,
+               f"多次重试后日志未展示重试次数与累计耗时: {msg}")
+
+        srv.requests.clear()
+        await run_worker(bot, make_item("729"), timeout=5)
+        hedge_logs = [m for m in bot.logs if "启动滚动对冲探针" in m]
+        expect(not hedge_logs and srv.count("POST", "/cart_in") == 8,
+               f"每次请求仅 40ms (< hedge_delay 200ms)，却误触发了对冲探针！日志={hedge_logs}, 总请求数={srv.count('POST', '/cart_in')}")
+
+
+@case("F15", "并发机制", "[实盘] 前4次快回空车(不误发探针) → 第5次开售瞬间主连接卡队列 → 探针精准触发反超出单", "高")
+async def f15():
+    srv = FakeFC2Server(real_templates=True)
+    it = srv.add_item("735", stock=2, upcoming=True)
+    cart_calls = 0
+    orig_dispatch = srv._dispatch
+
+    async def custom_dispatch(request, ctx):
+        nonlocal cart_calls
+        if ctx.method == "POST" and ctx.path == "/cart_in":
+            cart_calls += 1
+            if cart_calls <= 4:
+                # 前 4 次尚未开放库存，30ms 快速返回空购物车 (远小于 hedge_delay=0.22s)
+                await asyncio.sleep(0.03)
+            elif cart_calls == 5:
+                # 第 5 次起正式开放库存！但第 5 次（主连接）遭遇服务器慢队列卡死 1.5s
+                it.upcoming = False
+                await asyncio.sleep(1.5)
+            else:
+                # 第 6 次（对冲探针#1）走新通道 20ms 极速响应！
+                it.upcoming = False
+                await asyncio.sleep(0.02)
+        return await orig_dispatch(request, ctx)
+
+    srv._dispatch = custom_dispatch
+    async with sim_bot(srv, order={
+        "dry_run": False,
+        "hedge_requests": True,
+        "hedge_delay": 0.22,
+        "session_retries": 100,
+        "session_retry_delay": 0.01,
+        "worker_retries": 2
+    }) as bot:
+        t0 = time.perf_counter()
+        await run_worker(bot, make_item("735"), timeout=6)
+        elapsed = time.perf_counter() - t0
+        expect("735" in bot.purchased_item_ids and len(srv.orders) == 1 and elapsed < 1.2,
+               f"purchased={bot.purchased_item_ids}, orders={len(srv.orders)}, elapsed={elapsed:.2f}s" + tail(bot, 10))
+
+
+@case("F16", "并发机制", "[实盘·全真高压风暴] 4款重点新品(343/344/352/353)维护结束齐发：混合503/繁忙页/排队卡死/部分售罄", "致命", timeout=15)
+async def f16():
+    srv = FakeFC2Server(real_templates=True)
+    it343 = srv.add_item("343", title="ちっちゃなシリーズ ちぃち", stock=2, upcoming=True)
+    it344 = srv.add_item("344", title="ちっちゃなシリーズ なぁな", stock=2, upcoming=True)
+    it352 = srv.add_item("352", title="ちっちゃなシリーズ ひな", stock=2, upcoming=True)
+    it353 = srv.add_item("353", title="ちっちゃなシリーズ ひよ", stock=0, upcoming=True)  # 开门即秒光
+    srv.maintenance = True
+
+    # 343: 加购前 3 次 503 + GET /regi 1 次 200 繁忙页
+    srv.inject("POST", "/cart_in", "status", 503, times=3, when=lambda c: c.form.get("item_id") == "343")
+    srv.inject("GET", "/regi", "busy200", times=1)
+    # 344: 主连接第 1 次加购排队卡顿 1.2s (触发对冲探针救场) + POST /regi(Submit1) 1 次 502
+    srv.inject("POST", "/cart_in", "delay", 1.2, times=1, when=lambda c: c.form.get("item_id") == "344")
+    srv.inject("POST", "/regi", "status", 502, times=1, when=lambda c: "Submit1" in c.form)
+    # 352: 最终确认 Submit2 遇 1 次 503 后同会话恢复
+    srv.inject("POST", "/regi", "status", 503, times=1, when=lambda c: "Submit2" in c.form)
+
+    async with sim_bot(srv, order={
+        "dry_run": False,
+        "max_orders": 0,
+        "max_concurrent_workers": 8,
+        "session_retries": 100,
+        "session_retry_delay": 0.01,
+        "worker_retries": 100,
+        "worker_retry_delay": 0.02,
+        "hedge_requests": True,
+        "hedge_delay": 0.25,
+        "maintenance_direct_cart": True
+    }) as bot:
+        for iid in ("343", "344", "352", "353"):
+            bot.upcoming_items[iid] = {"item_id": iid, "title": f"ドール{iid}", "url": f"{BASE}/ca13/{iid}/", "is_upcoming": True}
+            start_priority_monitor(bot, iid)
+
+        in_maint = await wait_until(lambda: bot.is_in_maintenance, 2.0)
+        expect(in_maint, "未能进入维护状态" + tail(bot))
+
+        # 维护结束，343/344/352 开放库存，353 秒光
+        for it in (it343, it344, it352, it353):
+            it.upcoming = False
+        srv.maintenance = False
+
+        t0 = time.perf_counter()
+        done_all = await wait_until(
+            lambda: {"343", "344", "352"}.issubset(bot.purchased_item_ids) and "353" in bot.soldout_item_ids,
+            6.0
+        )
+        elapsed = time.perf_counter() - t0
+        ordered_items = sorted(list(o["items"].keys())[0] for o in srv.orders)
+        expect(
+            done_all and ordered_items == ["343", "344", "352"] and "353" in bot.soldout_item_ids,
+            f"4款高压齐发结果异常 (耗时 {elapsed:.2f}s): purchased={bot.purchased_item_ids}, "
+            f"soldout={bot.soldout_item_ids}, 实际出单={ordered_items}" + tail(bot, 12)
+        )
+
+
+@case("F17", "并发机制", "跨轮次重试时复用温热 TLS 连接池 (不销毁 AsyncClient) 且自动清空旧轮次 Cookie", "高")
+async def f17():
+    srv = FakeFC2Server()
+    srv.add_item("737", stock=2)
+    # 第 1 轮在 GET /regi 时连续 503 耗尽单轮 session_retries=2，迫使进入第 2 轮 worker attempt
+    srv.inject("GET", "/regi", "status", 503, times=2)
+    seen_clients = []
+    orig_exec = FC2Checkout.execute_checkout
+
+    async def tracked_exec(self, *args, **kwargs):
+        seen_clients.append(self.client)
+        return await orig_exec(self, *args, **kwargs)
+
+    FC2Checkout.execute_checkout = tracked_exec
+    try:
+        async with sim_bot(srv, order={
+            "dry_run": False,
+            "hedge_requests": False,
+            "session_retries": 2,
+            "session_retry_delay": 0.01,
+            "worker_retries": 3,
+            "worker_retry_delay": 0.01
+        }) as bot:
+            await run_worker(bot, make_item("737"), timeout=5)
+            expect(
+                "737" in bot.purchased_item_ids and len(seen_clients) == 2 and seen_clients[0] is seen_clients[1],
+                f"跨轮次未复用同一个底层 AsyncClient 连接池: seen_clients={seen_clients}, purchased={bot.purchased_item_ids}"
+            )
+    finally:
+        FC2Checkout.execute_checkout = orig_exec
+
+
+
+
 # =========================================================================
 # Runner
 # =========================================================================

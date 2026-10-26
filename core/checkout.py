@@ -49,6 +49,7 @@ class FC2Checkout:
         self.in_final_stage: bool = False
         self.final_submitted: bool = False
         self.before_final_submit: Optional[Callable[[], Any]] = None
+        self.last_activity_ts: float = time.perf_counter()
         self._cached_confirm_html: Optional[str] = None
         self._cached_confirm_soup: Optional[BeautifulSoup] = None
 
@@ -62,6 +63,7 @@ class FC2Checkout:
         self.steps_completed = 0
         self.in_final_stage = False
         self.final_submitted = False
+        self.last_activity_ts = time.perf_counter()
         self._cached_confirm_html = None
         self._cached_confirm_soup = None
 
@@ -237,20 +239,34 @@ class FC2Checkout:
 
         last_error = ""
         prev_timed_out = False
+        total_t0 = time.perf_counter()
+        self.last_activity_ts = total_t0
+
+        def _fmt_timing(attempt_num: int, last_ms: int) -> str:
+            if attempt_num <= 1:
+                return f"{last_ms}ms"
+            total_s = time.perf_counter() - total_t0
+            return f"重试{attempt_num}次, 累计{total_s:.1f}s, 末次{last_ms}ms"
+
         for attempt in range(1, self.retry_count + 1):
             try:
                 if prev_timed_out:
+                    self.last_activity_ts = time.perf_counter()
                     if await self._verify_item_in_cart_after_timeout():
+                        self.last_activity_ts = time.perf_counter()
                         self.steps_completed = max(self.steps_completed, 1)
                         return True, f"[重试第{attempt}次成功] 加购成功(超时复核已在车内)！"
                     prev_timed_out = False
 
                 t0 = time.perf_counter()
+                self.last_activity_ts = t0
                 resp = await self.client.post(cart_in_url, data=post_data, headers=req_headers)
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                now_ts = time.perf_counter()
+                self.last_activity_ts = now_ts
+                elapsed_ms = int((now_ts - t0) * 1000)
 
                 if resp.status_code != 200:
-                    last_error = f"Cart_in HTTP Error {resp.status_code} ({elapsed_ms}ms)"
+                    last_error = f"Cart_in HTTP Error {resp.status_code} ({_fmt_timing(attempt, elapsed_ms)})"
                     if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < self.retry_count:
                         await asyncio.sleep(self.retry_delay)
                         continue
@@ -259,11 +275,11 @@ class FC2Checkout:
                 html = resp.text
                 # Check for explicit out-of-stock messages (without false-matching product titles)
                 if self._is_cart_soldout(html):
-                    return False, f"加购失败：商品在庫切れ已售罄 ({elapsed_ms}ms)"
+                    return False, f"加购失败：商品在庫切れ已售罄 ({_fmt_timing(attempt, elapsed_ms)})"
 
                 # Check if cart is empty
                 if "カートに商品は入っていません" in html:
-                    last_error = f"加购未完成：购物车为空或尚未开放 ({elapsed_ms}ms)"
+                    last_error = f"加购未完成：购物车为空或尚未开放 ({_fmt_timing(attempt, elapsed_ms)})"
                     if attempt < self.retry_count:
                         await asyncio.sleep(self.retry_delay)
                         continue
@@ -276,20 +292,26 @@ class FC2Checkout:
                     return True, f"{prefix}加购成功！耗时: {elapsed_ms}ms"
 
                 # Otherwise it is a 200 OK busy page ("只今アクセスが集中") or maintenance page -> retry!
-                last_error = f"加购未完成：收到繁忙或维护页面 ({elapsed_ms}ms)"
+                last_error = f"加购未完成：收到繁忙或维护页面 ({_fmt_timing(attempt, elapsed_ms)})"
                 if attempt < self.retry_count:
                     await asyncio.sleep(self.retry_delay)
                     continue
                 return False, last_error
             except Exception as e:
+                self.last_activity_ts = time.perf_counter()
                 if isinstance(e, httpx.TimeoutException):
                     prev_timed_out = True
                 err_desc = str(e) if str(e) else type(e).__name__
-                last_error = f"加购网络异常: {err_desc}"
+                if attempt > 1:
+                    total_s = time.perf_counter() - total_t0
+                    last_error = f"加购网络异常: {err_desc} (重试{attempt}次, 累计{total_s:.1f}s)"
+                else:
+                    last_error = f"加购网络异常: {err_desc}"
                 if attempt < self.retry_count:
                     await asyncio.sleep(self.retry_delay)
                     continue
                 if prev_timed_out and await self._verify_item_in_cart_after_timeout():
+                    self.last_activity_ts = time.perf_counter()
                     self.steps_completed = max(self.steps_completed, 1)
                     return True, "加购成功(超时后复核已在车内)！"
                 return False, last_error
@@ -307,7 +329,9 @@ class FC2Checkout:
 
         for attempt in range(1, self.retry_count + 1):
             try:
+                self.last_activity_ts = time.perf_counter()
                 resp = await self.client.get(regi_url)
+                self.last_activity_ts = time.perf_counter()
                 if resp.status_code != 200:
                     last_error = f"GET /regi returned HTTP {resp.status_code}"
                     if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < self.retry_count:
@@ -588,8 +612,11 @@ class FC2Checkout:
         for attempt in range(1, self.retry_count + 1):
             try:
                 t0 = time.perf_counter()
+                self.last_activity_ts = t0
                 resp = await self.client.post(regi_url, data=post_data, headers=req_headers)
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                now_ts = time.perf_counter()
+                self.last_activity_ts = now_ts
+                elapsed_ms = int((now_ts - t0) * 1000)
 
                 if resp.status_code != 200:
                     last_error = f"POST /regi HTTP Error {resp.status_code} ({elapsed_ms}ms)"
@@ -742,8 +769,11 @@ class FC2Checkout:
             try:
                 self.final_submitted = True
                 t0 = time.perf_counter()
+                self.last_activity_ts = t0
                 resp = await self.client.post(target_url, data=final_payload, headers=req_headers)
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                now_ts = time.perf_counter()
+                self.last_activity_ts = now_ts
+                elapsed_ms = int((now_ts - t0) * 1000)
 
                 if resp.status_code != 200:
                     last_error = f"最终提交 HTTP 错误 {resp.status_code} ({elapsed_ms}ms)"

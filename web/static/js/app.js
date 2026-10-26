@@ -21,6 +21,7 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchConfig();
   initEventHandlers();
   initIntervalControls();
+  initSecurityTab();
 
   // Polling loop for status updates every 2s
   setInterval(fetchStatus, 2000);
@@ -201,6 +202,19 @@ function initEventHandlers() {
   const btnClearFilter = document.getElementById("btn-clear-filter");
 
   if (filterInput) {
+    // Clear any unwanted browser email autofill on initial page load
+    filterInput.value = "";
+    catalogFilterQuery = "";
+    if (btnClearFilter) btnClearFilter.style.display = "none";
+    setTimeout(() => {
+      if (filterInput.value && filterInput.value.includes("@")) {
+        filterInput.value = "";
+        catalogFilterQuery = "";
+        if (btnClearFilter) btnClearFilter.style.display = "none";
+        updateCatalogView(false);
+      }
+    }, 120);
+
     filterInput.addEventListener("input", (e) => {
       catalogFilterQuery = e.target.value;
       if (btnClearFilter) {
@@ -341,6 +355,10 @@ window.cancelActiveOrder = async function(itemId) {
 async function fetchStatus() {
   try {
     const resp = await fetch("/api/status");
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
     if (!resp.ok) return;
     const data = await resp.json();
     currentStatus = data;
@@ -1215,3 +1233,263 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+// Security & Password Settings Tab
+function initSecurityTab() {
+  // Password visibility eye toggles
+  document.querySelectorAll(".btn-eye-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-target");
+      const input = document.getElementById(targetId);
+      if (!input) return;
+      if (input.type === "password") {
+        input.type = "text";
+        btn.textContent = "🙈";
+      } else {
+        input.type = "password";
+        btn.textContent = "👁️";
+      }
+    });
+  });
+
+  // Save Password Button (both in pane header and bottom of form)
+  const btnSubmitPwd = document.getElementById("btn-submit-change-pwd");
+  if (btnSubmitPwd) {
+    btnSubmitPwd.addEventListener("click", submitPasswordChange);
+  }
+  const btnSaveTop = document.getElementById("btn-save-pwd-top");
+  if (btnSaveTop) {
+    btnSaveTop.addEventListener("click", submitPasswordChange);
+  }
+
+  // Manual Add IP Button
+  const btnAddIp = document.getElementById("btn-add-manual-ip");
+  if (btnAddIp) {
+    btnAddIp.addEventListener("click", addManualIp);
+  }
+
+  // Logout / Clear Current IP Button
+  const btnLogout = document.getElementById("btn-logout-ip");
+  if (btnLogout) {
+    btnLogout.addEventListener("click", logoutCurrentIp);
+  }
+
+  // Fetch initial auth and IP status
+  fetchAuthStatus();
+}
+
+async function fetchAuthStatus() {
+  try {
+    const resp = await fetch("/api/auth/status");
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (resp.status === 404) {
+      // Background server process was started before auth routes were added
+      return;
+    }
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Client IP display
+    const ipDisplay = document.getElementById("sec-current-ip-display");
+    if (ipDisplay) ipDisplay.textContent = data.client_ip || "未知";
+
+    // Default password warning alert banner
+    const alertEl = document.getElementById("sec-default-pwd-alert");
+    if (alertEl) {
+      alertEl.style.display = data.password_is_default ? "flex" : "none";
+    }
+
+    // IP Auth Badge
+    const authBadge = document.getElementById("sec-ip-auth-badge");
+    if (authBadge) {
+      if (data.is_ip_remembered) {
+        authBadge.textContent = "🟢 当前 IP 已永久免密";
+        authBadge.className = "badge badge-success";
+      } else {
+        authBadge.textContent = "⚪ 会话授权 (未单独记住 IP)";
+        authBadge.className = "badge badge-neutral";
+      }
+    }
+
+    // Remembered IPs count and chips
+    const countEl = document.getElementById("sec-ip-count");
+    if (countEl) countEl.textContent = (data.authenticated_ips || []).length;
+
+    renderIpChips(data.authenticated_ips || [], data.client_ip);
+  } catch (e) {
+    console.warn("fetchAuthStatus error:", e);
+  }
+}
+
+function renderIpChips(ipList, currentIp) {
+  const container = document.getElementById("sec-ip-chips-container");
+  if (!container) return;
+
+  if (!ipList || ipList.length === 0) {
+    container.innerHTML = '<span style="font-size:0.8rem; color:var(--text-sub);">暂无记录的免密 IP，所有新 IP 均需输入密码</span>';
+    return;
+  }
+
+  container.innerHTML = "";
+  ipList.forEach(ip => {
+    const chip = document.createElement("div");
+    const isCurrent = (ip === currentIp);
+    chip.className = `sec-ip-chip ${isCurrent ? "is-current" : ""}`;
+
+    const textSpan = document.createElement("span");
+    textSpan.textContent = isCurrent ? `🌐 ${ip} (本设备)` : `💻 ${ip}`;
+    chip.appendChild(textSpan);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "sec-ip-chip-remove";
+    removeBtn.title = "移除该 IP 免密权限";
+    removeBtn.innerHTML = "&times;";
+    removeBtn.addEventListener("click", () => removeIp(ip));
+    chip.appendChild(removeBtn);
+
+    container.appendChild(chip);
+  });
+}
+
+async function submitPasswordChange() {
+  const oldPwdInput = document.getElementById("sec-current-pwd");
+  const newPwdInput = document.getElementById("sec-new-pwd");
+  const confirmPwdInput = document.getElementById("sec-confirm-pwd");
+
+  const oldPwd = oldPwdInput ? oldPwdInput.value.trim() : "";
+  const newPwd = newPwdInput ? newPwdInput.value.trim() : "";
+  const confirmPwd = confirmPwdInput ? confirmPwdInput.value.trim() : "";
+
+  if (!newPwd) {
+    showToast("请输入新访问密码！", "warn");
+    if (newPwdInput) newPwdInput.focus();
+    return;
+  }
+
+  if (newPwd.length < 4) {
+    showToast("新密码长度不能少于 4 位字符！", "warn");
+    if (newPwdInput) newPwdInput.focus();
+    return;
+  }
+
+  if (newPwd !== confirmPwd) {
+    showToast("两次输入的新密码不一致，请检查！", "error");
+    if (confirmPwdInput) confirmPwdInput.focus();
+    return;
+  }
+
+  try {
+    let resp = await fetch("/api/auth/update-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        old_password: oldPwd || undefined,
+        new_password: newPwd
+      })
+    });
+
+    // If 404 (because Python server running in terminal hasn't been restarted to load new endpoints)
+    if (resp.status === 404) {
+      console.warn("/api/auth/update-password returned 404, falling back to /api/config");
+      resp = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          web: { password: newPwd }
+        })
+      });
+      if (resp.ok) {
+        showToast("✅ 新密码已直接写入 config.json！请重启运行中的 python run.py 服务", "success");
+        if (oldPwdInput) oldPwdInput.value = "";
+        if (newPwdInput) newPwdInput.value = "";
+        if (confirmPwdInput) confirmPwdInput.value = "";
+        return;
+      }
+    }
+
+    const data = await resp.json();
+    if (resp.ok && data.success) {
+      showToast("✅ 访问密码修改成功！已永久写入 config.json", "success");
+      if (oldPwdInput) oldPwdInput.value = "";
+      if (newPwdInput) newPwdInput.value = "";
+      if (confirmPwdInput) confirmPwdInput.value = "";
+      fetchAuthStatus();
+    } else {
+      showToast(data.detail || "修改密码失败，请核对原密码", "error");
+    }
+  } catch (e) {
+    showToast("修改密码请求失败: " + e.message, "error");
+  }
+}
+
+async function addManualIp() {
+  const input = document.getElementById("sec-input-manual-ip");
+  if (!input) return;
+  const ip = input.value.trim();
+  if (!ip) {
+    showToast("请输入要添加的 IP 地址！", "warn");
+    input.focus();
+    return;
+  }
+
+  try {
+    const resp = await fetch("/api/auth/ips/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip: ip })
+    });
+    const data = await resp.json();
+    if (resp.ok && data.success) {
+      showToast(`✅ IP [${ip}] 已成功加入免密白名单并永久保存`, "success");
+      input.value = "";
+      fetchAuthStatus();
+    } else {
+      showToast(data.detail || "添加 IP 失败", "error");
+    }
+  } catch (e) {
+    showToast("添加 IP 失败: " + e.message, "error");
+  }
+}
+
+async function removeIp(ip) {
+  if (!confirm(`确定要移除 IP [${ip}] 的免密授权吗？\n移除后该 IP 下次访问将需要输入密码。`)) {
+    return;
+  }
+
+  try {
+    const resp = await fetch("/api/auth/ips/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip: ip })
+    });
+    const data = await resp.json();
+    if (resp.ok && data.success) {
+      showToast(`已移除 IP [${ip}] 的免密授权`, "info");
+      fetchAuthStatus();
+    } else {
+      showToast(data.detail || "移除 IP 失败", "error");
+    }
+  } catch (e) {
+    showToast("移除 IP 失败: " + e.message, "error");
+  }
+}
+
+async function logoutCurrentIp() {
+  if (!confirm("确定要解除当前设备的免密授权并退出登录吗？\n退出后将跳转至登录页面重新验证密码。")) {
+    return;
+  }
+
+  try {
+    await fetch("/api/logout", { method: "POST" });
+    showToast("已成功退出登录，正在跳转...", "info");
+    setTimeout(() => {
+      window.location.replace("/login?t=" + Date.now());
+    }, 300);
+  } catch (e) {
+    window.location.replace("/login?t=" + Date.now());
+  }
+}
+

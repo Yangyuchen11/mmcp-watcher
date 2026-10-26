@@ -1168,21 +1168,34 @@ class BotEngine:
                     if not hedge_enabled:
                         res = await _single_attempt("主请求", "primary", is_first_use=(attempt == 1))
                     else:
-                        # 🚀 智能进度感知滚动对冲机制 (Progress-Aware Hedged Requests):
-                        # 启动主请求线程；若超过 hedge_delay 秒仍未完成加购，保留主连接继续排队并启动对冲探针。
-                        # 一旦主请求已完成加购 (steps_completed >= 1) 或进入最终确认阶段 (in_final_stage)，
-                        # 绝不盲目切断主请求或滥发探针，全力保护已抢到手的购物车直通结账！
+                        # 🚀 智能进度与真实卡顿感知滚动对冲机制 (Activity & Progress-Aware Hedged Requests):
+                        # 基于单次 HTTP 请求真实卡顿时间 (last_activity_ts) 判定是否触发对冲探针：
+                        # 只要主请求内部每次 HTTP 往返都在正常快速返回 (< hedge_delay)，说明主连接通畅，绝不误发探针；
+                        # 一旦某一次请求真正卡顿超过 hedge_delay 秒，保留主连接继续排队并立即拉起对冲探针救场！
                         t1_holder: List[FC2Checkout] = []
+                        t1_start_ts = time.perf_counter()
                         t1 = asyncio.create_task(_single_attempt("主请求", "primary", t1_holder, is_first_use=(attempt == 1)))
-                        done, pending = await asyncio.wait([t1], timeout=hedge_delay)
 
-                        if t1 in done:
+                        while not t1.done():
+                            t1_chk = t1_holder[0] if t1_holder else None
+                            last_ts = t1_chk.last_activity_ts if t1_chk else t1_start_ts
+                            stalled_for = time.perf_counter() - last_ts
+                            remaining_wait = hedge_delay - stalled_for
+                            if remaining_wait <= 0.002:
+                                break
+                            done, _ = await asyncio.wait([t1], timeout=remaining_wait)
+                            if t1 in done:
+                                break
+
+                        if t1.done():
                             try:
                                 res = t1.result()
                             except Exception as err:
                                 res = {"success": False, "message": f"主请求异常: {err}"}
                         else:
-                            self.log("WARN", f"⏱️ 商品 [{item.title}] (ID: {item_id}) 主请求超过 {hedge_delay}s 未响应，维持主连接排队，启动滚动对冲探针竞速！")
+                            t1_chk = t1_holder[0] if t1_holder else None
+                            if not (t1_chk and (t1_chk.steps_completed >= 1 or t1_chk.in_final_stage)):
+                                self.log("WARN", f"⏱️ 商品 [{item.title}] (ID: {item_id}) 主请求单次响应超过 {hedge_delay}s 未返回，维持主连接排队，启动滚动对冲探针竞速！")
                             max_hedge_probes = 2
                             current_hedge_task: Optional[asyncio.Task] = None
                             current_hedge_holder: List[FC2Checkout] = []
@@ -1206,6 +1219,7 @@ class BotEngine:
                                 if item_id in self.active_orders_status:
                                     self.active_orders_status[item_id]["status"] = f"滚动对冲中 (探针#{probe_idx}, 主线程排队中)"
                                 current_hedge_holder = []
+                                probe_start_ts = time.perf_counter()
                                 current_hedge_task = asyncio.create_task(
                                     _single_attempt(
                                         f"对冲探针#{probe_idx}",
@@ -1215,11 +1229,25 @@ class BotEngine:
                                     )
                                 )
 
-                                done2, pending2 = await asyncio.wait(
-                                    [t1, current_hedge_task],
-                                    timeout=probe_timeout,
-                                    return_when=asyncio.FIRST_COMPLETED
-                                )
+                                done2 = set()
+                                while not t1.done() and not current_hedge_task.done():
+                                    h_chk = current_hedge_holder[0] if current_hedge_holder else None
+                                    h_last_ts = h_chk.last_activity_ts if h_chk else probe_start_ts
+                                    h_stalled = time.perf_counter() - h_last_ts
+                                    rem_probe = probe_timeout - h_stalled
+                                    if rem_probe <= 0.002:
+                                        break
+                                    done2, _ = await asyncio.wait(
+                                        [t1, current_hedge_task],
+                                        timeout=rem_probe,
+                                        return_when=asyncio.FIRST_COMPLETED
+                                    )
+                                    if done2:
+                                        break
+                                if t1.done():
+                                    done2.add(t1)
+                                if current_hedge_task.done():
+                                    done2.add(current_hedge_task)
 
                                 # Case 1: 主线程完成
                                 if t1 in done2:

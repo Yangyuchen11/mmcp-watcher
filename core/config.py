@@ -63,7 +63,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "web": {
         "host": "0.0.0.0",
         "port": 8081,
-        "secret_token": ""
+        "secret_token": "",
+        "password": "987654321",
+        "remember_ips": True,
+        "authenticated_ips": []
     }
 }
 
@@ -178,6 +181,11 @@ class ConfigManager:
                     has_override = True
                 except ValueError:
                     pass
+
+        web_pwd = os.environ.get("WEB_PASSWORD")
+        if web_pwd and web_pwd.strip():
+            config.setdefault("web", {})["password"] = web_pwd.strip()
+            has_override = True
 
         # If any env override was applied, immediately persist to self.config_path so the web UI reads it
         if has_override:
