@@ -568,6 +568,7 @@ class BotEngine:
                 t0 = time.perf_counter()
                 enable_empty_check = shop_cfg.get("enable_empty_catalog_detection", True)
                 empty_threshold = shop_cfg.get("empty_catalog_threshold", 2)
+                catalog_timeout = float(shop_cfg.get("catalog_timeout_seconds", 5.0))
 
                 items, triggers, is_maintenance, maint_reason = await self.monitor.check_once(
                     monitor_url=monitor_url,
@@ -578,7 +579,8 @@ class BotEngine:
                     max_price=max_price,
                     force_instock_trigger=False,
                     enable_empty_catalog_check=enable_empty_check,
-                    empty_catalog_threshold=empty_threshold
+                    empty_catalog_threshold=empty_threshold,
+                    timeout=catalog_timeout
                 )
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
 

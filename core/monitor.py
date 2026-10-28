@@ -120,16 +120,17 @@ class FC2Monitor:
             limits = httpx.Limits(max_keepalive_connections=20, max_connections=30, keepalive_expiry=60.0)
             self.client = httpx.AsyncClient(
                 headers=self.headers,
-                timeout=httpx.Timeout(40.0, connect=10.0),
+                timeout=httpx.Timeout(5.0, connect=3.0),
                 limits=limits,
                 http2=False,  # FC2 Cart CGI OpenResty server stalls/times out on HTTP/2; HTTP/1.1 is significantly faster and reliable
                 follow_redirects=True
             )
         return self.client
 
-    async def fetch_page(self, url: str, timeout: Optional[float] = None) -> Tuple[Optional[str], int]:
+    async def fetch_page(self, url: str, timeout: Optional[float] = 5.0) -> Tuple[Optional[str], int]:
         client = await self._get_client()
-        req_timeout = httpx.Timeout(timeout, connect=min(5.0, timeout if timeout else 5.0)) if timeout else None
+        to = timeout if timeout is not None else 5.0
+        req_timeout = httpx.Timeout(to, connect=min(3.0, to))
         for attempt in range(2):
             try:
                 resp = await client.get(url, timeout=req_timeout)
@@ -777,7 +778,8 @@ class FC2Monitor:
         max_price: Optional[int] = None,
         force_instock_trigger: bool = False,
         enable_empty_catalog_check: bool = True,
-        empty_catalog_threshold: int = 2
+        empty_catalog_threshold: int = 2,
+        timeout: float = 5.0
     ) -> Tuple[List[ShopItem], List[Tuple[str, ShopItem]], bool, str]:
         """
         Performs one monitoring scan.
@@ -786,7 +788,7 @@ class FC2Monitor:
         """
         # If scan_pages == 1: single request
         if scan_pages <= 1:
-            html, status = await self.fetch_page(monitor_url)
+            html, status = await self.fetch_page(monitor_url, timeout=timeout)
             if self.check_maintenance(html, status):
                 self.empty_catalog_consecutive = 0
                 return [], [], True, "官方维护公告标识"
@@ -809,7 +811,7 @@ class FC2Monitor:
         else:
             # Parallel scan of top pages (e.g. page 0 and page 1)
             base_query = monitor_url.split("?")[0]
-            tasks = [self.fetch_page(f"{base_query}?sort=5&page={p}") for p in range(scan_pages)]
+            tasks = [self.fetch_page(f"{base_query}?sort=5&page={p}", timeout=timeout) for p in range(scan_pages)]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             items = []

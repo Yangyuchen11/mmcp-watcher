@@ -17,6 +17,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_price": 0,          # Minimum price in JPY (0 means no lower limit)
         "max_price": 0,          # Maximum price in JPY (0 means no upper limit)
         "scan_pages": 2,
+        "catalog_timeout_seconds": 5.0,
         "priority_rush_interval_seconds": 0.3,
         "priority_timeout_seconds": 4.0,
         "priority_hedge_enabled": True,
